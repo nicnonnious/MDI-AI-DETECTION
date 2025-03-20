@@ -1,10 +1,10 @@
-# MDI AI Detection System
+# Surveillance System UI
 
 A comprehensive security camera system with AI-powered object detection, smart searching, and alerting capabilities.
 
 ## Overview
 
-The MDI AI Detection System is designed to provide intelligent monitoring of security cameras, automatically detect objects of interest (people, vehicles, weapons, etc.), and alert users based on customizable rules. The system includes:
+The System is designed to provide intelligent monitoring of security cameras, automatically detect objects of interest (people, vehicles, weapons, etc.), and alert users based on customizable rules. The system includes:
 
 - ONVIF/RTSP camera support
 - Local webcam integration for testing
