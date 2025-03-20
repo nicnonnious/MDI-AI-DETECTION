@@ -690,38 +690,145 @@ const CameraView = ({
     };
   };
 
+  // Track last double click time using ref instead of window
+  const lastDoubleClickTimeRef = useRef(0);
+  
+  // Track layout transitions
+  const isTransitioning = useRef(false);
+  const transitionTimeoutRef = useRef(null);
+  
   // Handle double-click on a camera to focus on it in single view mode
   const handleCameraDoubleClick = useCallback((camera) => {
-    // Prevent multiple rapid executions
-    if (window.lastDoubleClickTime && Date.now() - window.lastDoubleClickTime < 300) {
+    // Prevent actions during transition
+    if (isTransitioning.current) {
+      console.log('Layout transition in progress, ignoring double-click');
       return;
     }
-    window.lastDoubleClickTime = Date.now();
+
+    // Prevent multiple rapid executions
+    const now = Date.now();
+    if (now - lastDoubleClickTimeRef.current < 300) {
+      return;
+    }
+    lastDoubleClickTimeRef.current = now;
     
     if (onCameraFocus) {
+      isTransitioning.current = true;
+      
       if (layout === 'single') {
-        // If we're already in single view, this is a request to go back to multi-view
-        console.log(`Double-clicked on camera in single view, returning to multi-view layout`);
-        onCameraFocus(camera.id, false); // Don't change layout via this call
+        // Going back to multi-view
+        console.log('Double-clicked in single view, transitioning to multi-view');
         
-        // Call the global toggle function
-        if (window.toggleCameraLayout) {
-          window.toggleCameraLayout();
+        // First pause and unload all videos
+        Object.entries(videoRefs.current).forEach(([id, videoEl]) => {
+          if (videoEl) {
+            try {
+              videoEl.pause();
+              videoEl.src = '';
+              videoEl.load();
+              delete videoRefs.current[id];
+            } catch (err) {
+              console.error(`Error cleaning up video ${id}:`, err);
+            }
+          }
+        });
+
+        // Call focus change
+        onCameraFocus(camera.id, false);
+        
+        // Delay the layout toggle to ensure cleanup is complete
+        if (transitionTimeoutRef.current) {
+          clearTimeout(transitionTimeoutRef.current);
         }
+        
+        transitionTimeoutRef.current = setTimeout(() => {
+          if (window.toggleCameraLayout) {
+            window.toggleCameraLayout();
+          }
+          isTransitioning.current = false;
+        }, 100);
+        
       } else {
-        // Normal behavior - go to single view with this camera
-        console.log(`Double-clicked on camera ${camera.id} in multi-view, switching to single view`);
+        // Going to single view
+        console.log(`Double-clicked on camera ${camera.id}, transitioning to single view`);
+        
+        // Clean up all other videos first
+        Object.entries(videoRefs.current).forEach(([id, videoEl]) => {
+          if (videoEl && parseInt(id) !== camera.id) {
+            try {
+              videoEl.pause();
+              videoEl.src = '';
+              videoEl.load();
+              delete videoRefs.current[id];
+            } catch (err) {
+              console.error(`Error cleaning up video ${id}:`, err);
+            }
+          }
+        });
+        
+        // Call focus change after cleanup
         onCameraFocus(camera.id, true);
+        
+        // Reset transition state after a delay
+        if (transitionTimeoutRef.current) {
+          clearTimeout(transitionTimeoutRef.current);
+        }
+        
+        transitionTimeoutRef.current = setTimeout(() => {
+          isTransitioning.current = false;
+        }, 100);
       }
     }
   }, [layout, onCameraFocus]);
 
-  // Cleanup the lastDoubleClickTime when component unmounts
+  // Enhanced cleanup when component unmounts
   useEffect(() => {
     return () => {
-      delete window.lastDoubleClickTime;
+      // Clear any pending transitions
+      if (transitionTimeoutRef.current) {
+        clearTimeout(transitionTimeoutRef.current);
+      }
+      
+      // Clean up all video elements
+      Object.entries(videoRefs.current).forEach(([id, videoEl]) => {
+        if (videoEl) {
+          try {
+            videoEl.pause();
+            videoEl.src = '';
+            videoEl.load();
+          } catch (err) {
+            console.error(`Error cleaning up video ${id}:`, err);
+          }
+        }
+      });
+      
+      // Reset refs
+      videoRefs.current = {};
+      webcamRefs.current = {};
+      isTransitioning.current = false;
     };
   }, []);
+
+  // Handle layout changes
+  useEffect(() => {
+    console.log(`Layout changed to ${layout}`);
+    
+    // Clean up videos that aren't needed in the new layout
+    Object.entries(videoRefs.current).forEach(([id, videoEl]) => {
+      const isVideoNeeded = Object.values(gridCameras).includes(parseInt(id));
+      if (videoEl && !isVideoNeeded) {
+        try {
+          console.log(`Cleaning up unused video ${id}`);
+          videoEl.pause();
+          videoEl.src = '';
+          videoEl.load();
+          delete videoRefs.current[id];
+        } catch (err) {
+          console.error(`Error cleaning up video ${id}:`, err);
+        }
+      }
+    });
+  }, [layout, gridCameras]);
 
   // Handle fullscreen button click - same as double-click
   const handleFullscreenClick = useCallback((e, camera) => {
