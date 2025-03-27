@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import styled from 'styled-components';
 import { standardCameras } from '../mockBackend';
+import CameraDetailsModal from './CameraDetailsModal';
+import Alerts from './Alerts';
+import Events from './Events';
+import UserDetailsModal from './UserDetailsModal';
+import RoleDeleteModal from './RoleDeleteModal';
 
 const SuperAdminContainer = styled.div`
   position: fixed;
@@ -664,6 +669,7 @@ const SuperAdminPanel = ({ onClose, activeSection = 'dashboard' }) => {
   const [selectedRole, setSelectedRole] = useState(null);
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [showAddCameraModal, setShowAddCameraModal] = useState(false);
+  const [selectedUser, setSelectedUser] = useState(null);
   const [newUser, setNewUser] = useState({
     name: '',
     email: '',
@@ -683,7 +689,44 @@ const SuperAdminPanel = ({ onClose, activeSection = 'dashboard' }) => {
     isRecordingEnabled: false,
     status: 'active'
   });
-  
+  const [selectedCamera, setSelectedCamera] = useState(null);
+  const [roleToDelete, setRoleToDelete] = useState(null);
+  const [roles, setRoles] = useState([
+    {
+      id: 1,
+      name: 'Administrator',
+      description: 'Full system access with all permissions',
+      permissions: [
+        'User Management',
+        'Role Management',
+        'Camera Management',
+        'Alert Management',
+        'System Configuration',
+        'View Analytics'
+      ]
+    },
+    {
+      id: 2,
+      name: 'Operator',
+      description: 'Can manage cameras and respond to alerts',
+      permissions: [
+        'Camera Management',
+        'Alert Management',
+        'View Analytics'
+      ]
+    },
+    {
+      id: 3,
+      name: 'Viewer',
+      description: 'Can view cameras and alerts only',
+      permissions: [
+        'View Cameras',
+        'View Alerts',
+        'View Analytics'
+      ]
+    }
+  ]);
+
   // Update roleSettings state with more granular permissions
   const [roleSettings, setRoleSettings] = useState({
     Admin: {
@@ -1154,6 +1197,25 @@ const SuperAdminPanel = ({ onClose, activeSection = 'dashboard' }) => {
     );
   };
   
+  const handleViewCamera = (camera) => {
+    setSelectedCamera(camera);
+  };
+
+  const handleViewUser = (user) => {
+    setSelectedUser(user);
+  };
+
+  const handleDeleteRole = (role) => {
+    setRoleToDelete(role);
+  };
+
+  const handleConfirmDeleteRole = (roleId) => {
+    // Here you would typically make an API call to delete the role
+    const updatedRoles = roles.filter(role => role.id !== roleId);
+    setRoles(updatedRoles);
+    setRoleToDelete(null);
+  };
+  
   const renderDashboard = () => (
     <>
       <DashboardGrid>
@@ -1306,8 +1368,7 @@ const SuperAdminPanel = ({ onClose, activeSection = 'dashboard' }) => {
                 </td>
                 <td>{user.lastActive}</td>
                 <td>
-                  <ActionButton>Edit</ActionButton>
-                  <ActionButton>Delete</ActionButton>
+                  <ActionButton onClick={() => handleViewUser(user)}>View</ActionButton>
                 </td>
               </tr>
             ))}
@@ -1414,6 +1475,14 @@ const SuperAdminPanel = ({ onClose, activeSection = 'dashboard' }) => {
             </ButtonGroup>
           </ConfigurationForm>
         </ConfigModal>
+      )}
+
+      {/* User Details Modal */}
+      {selectedUser && (
+        <UserDetailsModal
+          user={selectedUser}
+          onClose={() => setSelectedUser(null)}
+        />
       )}
     </>
   );
@@ -1624,8 +1693,7 @@ const SuperAdminPanel = ({ onClose, activeSection = 'dashboard' }) => {
                   <td>{camera.lastPing}</td>
                   <td>{camera.alertCount} alerts</td>
                   <td>
-                    <ActionButton>Configure</ActionButton>
-                    <ActionButton>View</ActionButton>
+                    <ActionButton onClick={() => handleViewCamera(camera)}>View</ActionButton>
                   </td>
                 </tr>
               ))}
@@ -1785,169 +1853,22 @@ const SuperAdminPanel = ({ onClose, activeSection = 'dashboard' }) => {
           </ConfigurationForm>
         </ConfigModal>
       )}
+
+      {selectedCamera && (
+        <CameraDetailsModal
+          camera={selectedCamera}
+          onClose={() => setSelectedCamera(null)}
+        />
+      )}
     </>
   );
   
   const renderEvents = () => (
-    <>
-      <TabsContainer>
-        <Tab active={activeTab === 'all'} onClick={() => setActiveTab('all')}>All Events</Tab>
-        <Tab active={activeTab === 'person'} onClick={() => setActiveTab('person')}>Person Detection</Tab>
-        <Tab active={activeTab === 'vehicle'} onClick={() => setActiveTab('vehicle')}>Vehicle Detection</Tab>
-        <Tab active={activeTab === 'object'} onClick={() => setActiveTab('object')}>Object Detection</Tab>
-      </TabsContainer>
-      
-      <TableContainer>
-        <Table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Type</th>
-              <th>Camera</th>
-              <th>Timestamp</th>
-              <th>Confidence</th>
-              <th>Details</th>
-              <th>Status</th>
-              <th>Alert</th>
-            </tr>
-          </thead>
-          <tbody>
-            {mockEvents
-              .filter(event => {
-                if (activeTab === 'person') return event.type === 'person_detected';
-                if (activeTab === 'vehicle') return event.type === 'vehicle_detected';
-                if (activeTab === 'object') return event.type === 'object_detected';
-                return true; // 'all' tab shows all events
-              })
-              .map(event => (
-                <tr key={event.id}>
-                  <td>#{event.id}</td>
-                  <td>
-                    <StatusBadge status={
-                      event.type === 'person_detected' ? 'active' :
-                      event.type === 'vehicle_detected' ? 'pending' : 'inactive'
-                    }>
-                      {event.type.split('_')[0].charAt(0).toUpperCase() + event.type.split('_')[0].slice(1)}
-                    </StatusBadge>
-                  </td>
-                  <td>{event.camera}</td>
-                  <td>{event.timestamp}</td>
-                  <td>{event.details.confidence}%</td>
-                  <td>
-                    {Object.entries(event.details)
-                      .filter(([key]) => key !== 'confidence')
-                      .map(([key, value]) => (
-                        <div key={key} style={{ fontSize: '12px' }}>
-                          {key}: {value}
-                        </div>
-                      ))
-                    }
-                  </td>
-                  <td>
-                    <StatusBadge status={event.status === 'processed' ? 'active' : 'pending'}>
-                      {event.status.charAt(0).toUpperCase() + event.status.slice(1)}
-                    </StatusBadge>
-                  </td>
-                  <td>
-                    {event.alert_generated ? (
-                      <StatusBadge status="inactive">Generated</StatusBadge>
-                    ) : (
-                      <StatusBadge status="pending">None</StatusBadge>
-                    )}
-                  </td>
-                </tr>
-              ))}
-          </tbody>
-        </Table>
-      </TableContainer>
-      
-      <HeaderButton>
-        <span className="material-icons">download</span>
-        Export Events
-      </HeaderButton>
-    </>
+    <Events />
   );
   
   const renderAlerts = () => (
-    <>
-      <TabsContainer>
-        <Tab active={activeTab === 'all'} onClick={() => setActiveTab('all')}>All Alerts</Tab>
-        <Tab active={activeTab === 'new'} onClick={() => setActiveTab('new')}>New</Tab>
-        <Tab active={activeTab === 'in_progress'} onClick={() => setActiveTab('in_progress')}>In Progress</Tab>
-        <Tab active={activeTab === 'resolved'} onClick={() => setActiveTab('resolved')}>Resolved</Tab>
-      </TabsContainer>
-      
-      <TableContainer>
-        <Table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Type</th>
-              <th>Camera</th>
-              <th>Timestamp</th>
-              <th>Severity</th>
-              <th>Message</th>
-              <th>Status</th>
-              <th>Assigned To</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {mockAlerts
-              .filter(alert => {
-                if (activeTab === 'new') return alert.status === 'new';
-                if (activeTab === 'in_progress') return alert.status === 'in_progress';
-                if (activeTab === 'resolved') return alert.status === 'resolved';
-                return true; // 'all' tab shows all alerts
-              })
-              .map(alert => (
-                <tr key={alert.id}>
-                  <td>#{alert.id}</td>
-                  <td>
-                    <StatusBadge status={
-                      alert.type === 'intrusion' ? 'inactive' :
-                      alert.type === 'system' ? 'pending' : 'active'
-                    }>
-                      {alert.type.charAt(0).toUpperCase() + alert.type.slice(1)}
-                    </StatusBadge>
-                  </td>
-                  <td>{alert.camera}</td>
-                  <td>{alert.timestamp}</td>
-                  <td>
-                    <StatusBadge status={
-                      alert.severity === 'high' ? 'inactive' :
-                      alert.severity === 'medium' ? 'pending' : 'active'
-                    }>
-                      {alert.severity.charAt(0).toUpperCase() + alert.severity.slice(1)}
-                    </StatusBadge>
-                  </td>
-                  <td>{alert.message}</td>
-                  <td>
-                    <StatusBadge status={
-                      alert.status === 'new' ? 'inactive' :
-                      alert.status === 'in_progress' ? 'pending' : 'active'
-                    }>
-                      {alert.status.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')}
-                    </StatusBadge>
-                  </td>
-                  <td>{alert.assignedTo || '—'}</td>
-                  <td>
-                    <ActionButton>View</ActionButton>
-                    {alert.status !== 'resolved' && (
-                      <ActionButton>Resolve</ActionButton>
-                    )}
-                  </td>
-                </tr>
-              ))}
-          </tbody>
-        </Table>
-      </TableContainer>
-      
-      <HeaderButton>
-        <span className="material-icons">download</span>
-        Export Alerts
-      </HeaderButton>
-    </>
+    <Alerts />
   );
   
   const renderModelConfigurationForm = () => (
@@ -3947,6 +3868,13 @@ const SuperAdminPanel = ({ onClose, activeSection = 'dashboard' }) => {
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
       />
+      {roleToDelete && (
+        <RoleDeleteModal
+          role={roleToDelete}
+          onClose={() => setRoleToDelete(null)}
+          onDelete={handleConfirmDeleteRole}
+        />
+      )}
     </SuperAdminContainer>
   );
 };

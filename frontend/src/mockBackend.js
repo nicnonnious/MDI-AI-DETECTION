@@ -133,4 +133,64 @@ try {
   console.error('Error handling camera localStorage:', e);
   // Reset to standard cameras if there's an error
   localStorage.setItem('mdi_cameras', JSON.stringify(standardCameras));
-} 
+}
+
+export const mockCameras = [
+  {
+    id: 1,
+    name: 'Front Entrance Camera',
+    location: 'Main Building Entrance',
+    manufacturer: 'Hikvision',
+    model: 'DS-2CD2185FWD-I',
+    serialNumber: 'DS319X847Y23',
+    status: 'active',
+    rtsp_url: 'rtsp://192.168.1.100:554/stream1',
+    http_url: 'http://192.168.1.100/video',
+    username: 'admin',
+    streamChannel: 'Primary',
+    quality: '1080p',
+    lastPing: '2024-03-26 00:24:40',
+    alertCount: 3,
+    isLive: true,
+    lastThumbnail: 'https://example.com/thumbnail1.jpg',
+    videoSrc: 'https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4'
+  },
+  {
+    id: 2,
+    name: 'Parking Lot Camera',
+    location: 'North Parking Area',
+    manufacturer: 'Axis',
+    model: 'P3245-LVE',
+    serialNumber: 'AXPV238472X',
+    status: 'active',
+    rtsp_url: 'rtsp://192.168.1.101:554/stream1',
+    http_url: 'http://192.168.1.101/video',
+    username: 'admin',
+    streamChannel: 'Primary',
+    quality: '4K',
+    lastPing: '2024-03-26 00:24:35',
+    alertCount: 1,
+    isLive: true,
+    lastThumbnail: 'https://example.com/thumbnail2.jpg',
+    videoSrc: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4'
+  },
+  {
+    id: 3,
+    name: 'Loading Dock Camera',
+    location: 'Warehouse Back',
+    manufacturer: 'Dahua',
+    model: 'IPC-HDBW4631R-ZS',
+    serialNumber: 'DH472VX9234',
+    status: 'inactive',
+    rtsp_url: 'rtsp://192.168.1.102:554/stream1',
+    http_url: 'http://192.168.1.102/video',
+    username: 'admin',
+    streamChannel: 'Primary',
+    quality: '2K',
+    lastPing: '2024-03-26 00:20:15',
+    alertCount: 0,
+    isLive: false,
+    lastThumbnail: 'https://example.com/thumbnail3.jpg',
+    videoSrc: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4'
+  }
+]; 

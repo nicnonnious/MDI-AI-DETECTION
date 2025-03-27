@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import styled from 'styled-components';
 import { standardCameras } from '../mockBackend';
 
@@ -24,6 +24,21 @@ const ControlsRow = styled.div`
   margin-bottom: 3px;
   padding: 0 12px;
   height: 30px;
+  position: relative;
+`;
+
+const LeftControls = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 1;
+`;
+
+const CenterControls = styled.div`
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 0;
 `;
 
 const ControlButton = styled.button`
@@ -213,8 +228,8 @@ const EventMarker = styled.div`
   top: 50%;
   transform: translate(-50%, -50%);
   background-color: ${props => {
-    if (props.type === 'human') return '#2ecc71'; // Green for humans
-    if (props.type === 'vehicle') return '#3498db'; // Blue for vehicles
+    if (props.type === 'human') return '#2ecc71';
+    if (props.type === 'vehicle') return '#3498db';
     return '#b0bec5';
   }};
   left: ${props => props.position}%;
@@ -229,6 +244,11 @@ const EventMarker = styled.div`
     height: 14px;
     z-index: 10;
     opacity: 1;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+  }
+  
+  &:active {
+    transform: translate(-50%, -50%) scale(0.9);
   }
 `;
 
@@ -239,13 +259,27 @@ const PlayheadMarker = styled.div`
   bottom: 0;
   background-color: #e74c3c;
   left: ${props => props.position}%;
-    transform: translateX(-50%);
+  transform: translateX(-50%);
   z-index: 5;
   cursor: col-resize;
   box-shadow: 0 0 4px rgba(231, 76, 60, 0.6);
   
   &:hover {
     width: 3px;
+    box-shadow: 0 0 8px rgba(231, 76, 60, 0.8);
+  }
+  
+  &:before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 10px;
+    height: 10px;
+    background-color: #e74c3c;
+    border-radius: 50%;
+    box-shadow: 0 0 4px rgba(231, 76, 60, 0.6);
   }
 `;
 
@@ -375,6 +409,7 @@ const ActiveCameraBadge = styled.div`
   border-radius: 4px;
   font-size: 10px;
   color: #bbb;
+  white-space: nowrap;
   
   .material-icons {
     font-size: 14px;
@@ -413,6 +448,231 @@ const TimeMarkerLabel = styled.div`
   white-space: nowrap;
 `;
 
+const TimeRangeSelector = styled.div`
+  display: flex;
+  gap: 4px;
+  margin-right: 12px;
+`;
+
+const TimeRangeButton = styled.button`
+  background-color: ${props => props.active ? 'rgba(52, 152, 219, 0.3)' : 'rgba(0, 0, 0, 0.2)'};
+  color: ${props => props.active ? '#fff' : '#e0e0e0'};
+  border: none;
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  height: 22px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  
+  &:hover {
+    background-color: ${props => props.active ? 'rgba(52, 152, 219, 0.4)' : 'rgba(255, 255, 255, 0.1)'};
+    color: white;
+  }
+  
+  .material-icons {
+    font-size: 14px;
+  }
+`;
+
+const TimeDisplayGroup = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-right: 12px;
+`;
+
+const TimeRangeDisplay = styled.div`
+  font-family: 'Roboto Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: #888;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  
+  .material-icons {
+    font-size: 14px;
+    color: #666;
+  }
+`;
+
+const DateRangeButton = styled(TimeRangeButton)`
+  background-color: ${props => props.active ? 'rgba(156, 39, 176, 0.3)' : 'rgba(0, 0, 0, 0.2)'};
+  
+  &:hover {
+    background-color: ${props => props.active ? 'rgba(156, 39, 176, 0.4)' : 'rgba(255, 255, 255, 0.1)'};
+  }
+`;
+
+const DateRangePopup = styled.div`
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1f2e;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  display: ${props => props.show ? 'block' : 'none'};
+  
+  .date-inputs {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  
+  .date-input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  
+  label {
+    font-size: 11px;
+    color: #888;
+  }
+  
+  input {
+    background: #141722;
+    border: 1px solid #2c3040;
+    border-radius: 4px;
+    padding: 6px 8px;
+    color: white;
+    font-size: 12px;
+    width: 160px;
+    
+    &:focus {
+      outline: none;
+      border-color: #9c27b0;
+    }
+  }
+  
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+`;
+
+const DateRangeAction = styled.button`
+  background: ${props => props.primary ? '#9c27b0' : 'transparent'};
+  color: ${props => props.primary ? 'white' : '#888'};
+  border: none;
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  
+  &:hover {
+    background: ${props => props.primary ? '#ba68c8' : 'rgba(255, 255, 255, 0.1)'};
+    color: white;
+  }
+`;
+
+const CropMarker = styled.div`
+  position: absolute;
+  width: 2px;
+  top: 0;
+  bottom: 0;
+  background-color: #9c27b0;
+  left: ${props => props.position}%;
+  transform: translateX(-50%);
+  z-index: 4;
+  cursor: col-resize;
+  box-shadow: 0 0 4px rgba(156, 39, 176, 0.6);
+  pointer-events: all;
+  
+  &:hover {
+    width: 3px;
+  }
+  
+  &::after {
+    content: '';
+    position: absolute;
+    top: ${props => props.isStart ? '-8px' : 'auto'};
+    bottom: ${props => props.isStart ? 'auto' : '-8px'};
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-${props => props.isStart ? 'bottom' : 'top'}: 6px solid #9c27b0;
+  }
+`;
+
+const CropSelection = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background-color: rgba(156, 39, 176, 0.1);
+  border: 1px solid rgba(156, 39, 176, 0.3);
+  left: ${props => props.startPosition}%;
+  width: ${props => props.endPosition - props.startPosition}%;
+  z-index: 3;
+  pointer-events: none;
+`;
+
+const CropButton = styled(ControlButton)`
+  color: ${props => props.active ? '#9c27b0' : '#e0e0e0'};
+  
+  &:hover {
+    color: ${props => props.active ? '#ba68c8' : 'white'};
+    background-color: rgba(156, 39, 176, 0.2);
+  }
+`;
+
+const SaveCropButton = styled(ControlButton)`
+  background-color: #9c27b0;
+  color: white;
+  margin-left: 4px;
+  
+  &:hover {
+    background-color: #ba68c8;
+    color: white;
+  }
+  
+  &:disabled {
+    background-color: rgba(156, 39, 176, 0.2);
+    color: rgba(255, 255, 255, 0.3);
+  }
+`;
+
+const RecordingBar = styled.div`
+  position: absolute;
+  height: 3px;
+  background-color: ${props => props.isRecording ? '#3498db' : 'rgba(52, 152, 219, 0.15)'};
+  opacity: ${props => props.isRecording ? 0.9 : 0.4};
+  bottom: -6px;
+  left: ${props => props.startPosition}%;
+  width: ${props => props.endPosition - props.startPosition}%;
+  z-index: 2;
+  border-radius: 1px;
+  box-shadow: ${props => props.isRecording ? '0 0 4px rgba(52, 152, 219, 0.4)' : 'none'};
+`;
+
+// Add new styled component for future time overlay
+const FutureTimeOverlay = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: ${props => 100 - props.currentPosition}%;
+  background: rgba(0, 0, 0, 0.4);
+  pointer-events: ${props => props.isLive ? 'all' : 'none'};
+  display: ${props => props.isLive ? 'block' : 'none'};
+  z-index: 4;
+  cursor: not-allowed;
+`;
+
 const TimelineControls = ({ 
   detections = [], 
   activeCamera, 
@@ -421,7 +681,8 @@ const TimelineControls = ({
   onTimelineUpdate,
   initialPlayheadPosition = 30,
   initialIsLive = true,
-  initialIsPlaying = true
+  initialIsPlaying = true,
+  cameraFps = 30 // Add default FPS parameter
 }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [playheadPosition, setPlayheadPosition] = useState(initialPlayheadPosition);
@@ -431,13 +692,45 @@ const TimelineControls = ({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [showHumans, setShowHumans] = useState(true);
   const [showVehicles, setShowVehicles] = useState(true);
+  const [timeRange, setTimeRange] = useState('12h'); // New state for time range
   const timelineRef = useRef(null);
   const [timelineZoom, setTimelineZoom] = useState(1);
   const [timelineOffset, setTimelineOffset] = useState(0);
   const mockDetectionsRef = useRef({});
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [isHistoricalMode, setIsHistoricalMode] = useState(false);
+  const datePickerRef = useRef(null);
+  const [isCropping, setIsCropping] = useState(false);
+  const [cropStart, setCropStart] = useState(null);
+  const [cropEnd, setCropEnd] = useState(null);
+  const [isDraggingCrop, setIsDraggingCrop] = useState(null); // 'start' or 'end'
+  const [recordingPeriods, setRecordingPeriods] = useState([]);
   
-  // Use a fixed 12-hour timeline instead of variable video durations
-  const timelineDuration = 12 * 60 * 60; // 12 hours in seconds
+  // Add refs at component level
+  const timelineUpdateInitialRender = useRef(true);
+  const recordingPeriodsInitialRender = useRef(true);
+  
+  // Add new state for tracking the last update time
+  const [lastUpdateTime, setLastUpdateTime] = useState(Date.now());
+  const [lastFrameTime, setLastFrameTime] = useState(0);
+  
+  // Calculate timeline duration based on selected time range
+  const getTimelineDuration = () => {
+    switch (timeRange) {
+      case '1h':
+        return 3600; // 1 hour in seconds
+      case '12h':
+        return 43200; // 12 hours in seconds
+      case '24h':
+        return 86400; // 24 hours in seconds
+      default:
+        return 43200; // Default to 12 hours
+    }
+  };
+  
+  const timelineDuration = getTimelineDuration();
   
   // Simple pseudo-random number generator with seed
   const seededRandom = (seed) => {
@@ -449,40 +742,53 @@ const TimelineControls = ({
   const generateMockDetections = (cameraId) => {
     // Use camera ID as the seed base for consistent random generation
     let seed = cameraId * 1000;
-    // Get number of detections (stable for each camera)
-    const totalDetections = Math.floor(seededRandom(seed) * 15) + 15;
+    
+    // Scale number of detections based on time range
+    const baseDetections = Math.floor(seededRandom(seed) * 15) + 15;
+    const scaleFactor = {
+      '1h': 0.3,  // Fewer detections in 1 hour
+      '12h': 1,   // Base number of detections
+      '24h': 1.5, // More detections for 24 hours
+      '7d': 3     // Most detections for a week
+    };
+    
+    const totalDetections = Math.floor(baseDetections * (scaleFactor[timeRange] || 1));
     
     const detections = [];
+    const now = Date.now();
+    
     for (let i = 0; i < totalDetections; i++) {
       seed += i; // Change seed for each detection
-      // Random timestamp within the 12-hour window
-      const timestamp = seededRandom(seed * 3) * timelineDuration;
+      
+      // Generate timestamp relative to current time
+      const maxOffset = timelineDuration * 1000; // Convert to milliseconds
+      const timestamp = now - (seededRandom(seed * 3) * maxOffset);
+      
       // Determine type based on seed (consistent for each position)
       const type = seededRandom(seed * 7) > 0.5 ? 'human' : 'vehicle';
       
+      // Generate detection with absolute timestamp
       detections.push({
         id: `${cameraId}-${i}`,
         cameraId,
-        timestamp,
+        timestamp: Math.floor((now - timestamp) / 1000), // Convert to relative seconds
         type,
         confidence: seededRandom(seed * 11) * 0.3 + 0.7
       });
     }
     
-    return detections;
+    // Sort detections by timestamp
+    return detections.sort((a, b) => a.timestamp - b.timestamp);
   };
   
-  // Initialize mock detections only once
+  // Initialize mock detections when time range changes
   useEffect(() => {
-    // Only generate if our ref is empty
-    if (Object.keys(mockDetectionsRef.current).length === 0) {
-      const allMockDetections = {};
-      for (let i = 1; i <= 10; i++) {
-        allMockDetections[i] = generateMockDetections(i);
-      }
-      mockDetectionsRef.current = allMockDetections;
+    const allMockDetections = {};
+    for (let i = 1; i <= 10; i++) {
+      allMockDetections[i] = generateMockDetections(i);
     }
-  }, []);
+    mockDetectionsRef.current = allMockDetections;
+  }, [timeRange]); // Regenerate when time range changes
   
   // Get current camera detections from the ref
   const getCurrentCameraDetections = () => {
@@ -503,19 +809,131 @@ const TimelineControls = ({
     return camera ? camera.name : `Camera ${activeCamera}`;
   };
   
-  // Format timestamp from seconds to HH:MM
-  const formatTimestamp = (seconds) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  // Format timestamp from seconds to appropriate format based on time range
+  const formatTimestamp = (percentage) => {
+    const now = new Date();
+    const totalDuration = getTimelineDuration();
+    
+    if (isLive) {
+      // In live mode, calculate time relative to current time (80% mark)
+      const secondsFromNow = ((percentage - 80) / 20) * totalDuration;
+      const targetTime = new Date(now.getTime() + (secondsFromNow * 1000));
+      return formatTimeBasedOnRange(targetTime);
+    } else {
+      // In history mode, calculate time based on timeline duration and position
+      const secondsFromStart = (percentage / 100) * totalDuration;
+      const targetTime = new Date(now.getTime() - ((totalDuration - secondsFromStart) * 1000));
+      return formatTimeBasedOnRange(targetTime);
+    }
   };
   
-  // Format timestamp for tooltip with hours, minutes and seconds
-  const formatDetailedTimestamp = (seconds) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  // Add helper function for consistent time formatting
+  const formatTimeBasedOnRange = (date) => {
+    switch (timeRange) {
+      case '1h':
+        return date.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+      case '12h':
+      case '24h':
+        return date.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+      default:
+        return date.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+    }
+  };
+  
+  // Format timestamp for tooltip with appropriate detail level
+  const formatDetailedTimestamp = (percentage) => {
+    if (isLive) {
+      // In live mode, calculate time based on 80% position
+      const now = new Date();
+      const currentSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      
+      // Calculate how far from current time this position represents
+      const secondsOffset = ((percentage - 80) / 20) * timelineDuration;
+      const targetSeconds = currentSeconds + secondsOffset;
+      
+      const date = new Date();
+      date.setHours(0, 0, 0, 0);
+      date.setSeconds(targetSeconds);
+      
+      switch (timeRange) {
+        case '1h':
+          return date.toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit' 
+          });
+        case '12h':
+        case '24h':
+          return date.toLocaleString([], { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            second: '2-digit',
+            month: 'short',
+            day: 'numeric'
+          });
+        case '7d':
+          return date.toLocaleString([], { 
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+        default:
+          return date.toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit' 
+          });
+      }
+    } else {
+      // Non-live mode remains unchanged
+      const date = new Date(Date.now() - ((timelineDuration - (percentage / 100 * timelineDuration)) * 1000));
+      
+      switch (timeRange) {
+        case '1h':
+          return date.toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit' 
+          });
+        case '12h':
+        case '24h':
+          return date.toLocaleString([], { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            second: '2-digit',
+            month: 'short',
+            day: 'numeric'
+          });
+        case '7d':
+          return date.toLocaleString([], { 
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+        default:
+          return date.toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit' 
+          });
+      }
+    }
   };
   
   // Calculate current timestamp in video based on playhead position
@@ -527,22 +945,50 @@ const TimelineControls = ({
   useEffect(() => {
     if (!isPlaying) return;
     
-    const interval = setInterval(() => {
-      if (isLive) {
-        setCurrentTime(new Date());
-      } else {
-        setPlayheadPosition(prev => {
-          const newPosition = prev + (0.1 * playbackRate);
-          if (newPosition >= 100) {
-            return 0;
-          }
-          return newPosition;
-        });
-      }
-    }, 100);
+    let animationFrameId;
+    const frameInterval = 1000 / cameraFps;
+    let lastTime = 0;
     
-    return () => clearInterval(interval);
-  }, [isPlaying, isLive, playbackRate]);
+    const updateFrame = (timestamp) => {
+      if (!lastTime) lastTime = timestamp;
+      const deltaTime = timestamp - lastTime;
+      
+      if (deltaTime >= frameInterval) {
+        if (isLive) {
+          setPlayheadPosition(80);
+          setCurrentTime(new Date());
+        } else {
+          setPlayheadPosition(prev => {
+            const pixelsPerFrame = (100 / (timelineDuration * cameraFps)) * playbackRate;
+            const newPosition = prev + pixelsPerFrame;
+            
+            if (newPosition >= 100) {
+              return 0; // Loop back to start
+            }
+            
+            // Switch to live mode if we catch up
+            if (newPosition >= 80 && timeRange === '1h') {
+              setIsLive(true);
+              return 80;
+            }
+            
+            return newPosition;
+          });
+        }
+        lastTime = timestamp;
+      }
+      
+      animationFrameId = requestAnimationFrame(updateFrame);
+    };
+    
+    animationFrameId = requestAnimationFrame(updateFrame);
+    
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [isPlaying, isLive, playbackRate, timelineDuration, cameraFps, timeRange]);
   
   // Update current time every second
   useEffect(() => {
@@ -579,28 +1025,104 @@ const TimelineControls = ({
     
     const rect = timelineRef.current.getBoundingClientRect();
     const position = ((e.clientX - rect.left) / rect.width) * 100;
-    setPlayheadPosition(Math.max(0, Math.min(100, position)));
+    
+    // In live mode, limit position to 80%
+    if (isLive) {
+      const maxPosition = 80;
+      setPlayheadPosition(Math.max(0, Math.min(maxPosition, position)));
+    } else {
+      setPlayheadPosition(Math.max(0, Math.min(100, position)));
+    }
   };
   
   // Handle timeline click
   const handleTimelineClick = (e) => {
-    if (isDragging) return;
-    updatePlayheadPosition(e);
-    if (isLive) setIsLive(false);
+    if (isDragging || isCropping) return;
+    
+    const rect = timelineRef.current.getBoundingClientRect();
+    const clickPosition = ((e.clientX - rect.left) / rect.width) * 100;
+    
+    // In live mode, prevent clicking ahead of current time (80% position)
+    if (isLive && clickPosition > 80) {
+      return;
+    }
+    
+    // Calculate the exact timestamp at click position
+    const totalDuration = getTimelineDuration();
+    const clickedSeconds = (clickPosition / 100) * totalDuration;
+    const now = new Date();
+    const targetTime = new Date(now.getTime() - ((totalDuration - clickedSeconds) * 1000));
+    
+    // Set the playhead to the clicked position
+    setPlayheadPosition(Math.max(0, Math.min(isLive ? 80 : 100, clickPosition)));
+    
+    // Exit live mode when clicking on timeline
+    if (isLive) {
+      setIsLive(false);
+    }
+    
+    // Start playing from clicked position
+    setIsPlaying(true);
+    setCurrentTime(targetTime);
+    
+    // Notify parent component
+    if (onTimelineUpdate) {
+      onTimelineUpdate({
+        isLive: false,
+        isPlaying: true,
+        playheadPosition: clickPosition,
+        timestamp: clickedSeconds
+      });
+    }
   };
   
   // Handle event marker click
   const handleEventMarkerClick = (timestamp) => {
+    // Calculate position on timeline
     const position = (timestamp / timelineDuration) * 100;
+    
+    // Set playhead position
     setPlayheadPosition(position);
-    if (isLive) setIsLive(false);
+    
+    // Exit live mode
+    if (isLive) {
+      setIsLive(false);
+    }
+    
+    // Start playing from the detection point
+    setIsPlaying(true);
+    
+    // Update current time to the detection timestamp
+    const targetTime = new Date(Date.now() - ((timelineDuration - timestamp) * 1000));
+    setCurrentTime(targetTime);
+    
+    // Notify parent component of the change
+    if (onTimelineUpdate) {
+      onTimelineUpdate({
+        isLive: false,
+        isPlaying: true,
+        playheadPosition: position,
+        timestamp: timestamp
+      });
+    }
   };
   
   // Notify parent component when timeline state changes
   useEffect(() => {
-    if (onTimelineUpdate) {
-      onTimelineUpdate(playheadPosition, isLive, isPlaying);
+    // Skip initial render
+    if (timelineUpdateInitialRender.current) {
+      timelineUpdateInitialRender.current = false;
+      return;
     }
+
+    // Debounce the update to prevent rapid re-renders
+    const timeoutId = setTimeout(() => {
+      if (onTimelineUpdate) {
+        onTimelineUpdate(playheadPosition, isLive, isPlaying);
+      }
+    }, 100);
+
+    return () => clearTimeout(timeoutId);
   }, [playheadPosition, isLive, isPlaying, onTimelineUpdate]);
   
   // Update state when props change
@@ -616,27 +1138,117 @@ const TimelineControls = ({
   };
   
   // Toggle live mode
-  const toggleLive = () => {
-    if (!isLive) {
-      setPlayheadPosition(100);
+  const toggleLive = useCallback(() => {
+    const newIsLive = !isLive;
+    setIsLive(newIsLive);
+    
+    if (newIsLive) {
+      // When going live, position current time at 80% of the timeline
+      const now = new Date();
+      const totalSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+      
+      // Calculate the timeline window
+      // At 80% position, we show 80% of timelineDuration before now and 20% after
+      const timelineStart = totalSeconds - (timelineDuration * 0.8);
+      const timelineEnd = totalSeconds + (timelineDuration * 0.2);
+      
+      // Position should be exactly at 80%
+      setPlayheadPosition(80);
       setIsPlaying(true);
+      setLastUpdateTime(Date.now());
+      
+      onTimelineUpdate({
+        isLive: true,
+        isPlaying: true,
+        playheadPosition: 80
+      });
     }
-    setIsLive(!isLive);
-  };
+  }, [isLive, onTimelineUpdate, timelineDuration]);
   
-  // Generate time markers
+  // Get time range label
+  const getTimeRangeLabel = () => {
+    switch (timeRange) {
+      case '1h':
+        return 'Last Hour';
+      case '12h':
+        return '12 Hours';
+      case '24h':
+        return '24 Hours';
+      case '7d':
+        return 'Week';
+      default:
+        return '12 Hours';
+    }
+  };
+
+  // Handle time range change
+  const handleTimeRangeChange = (newRange) => {
+    const oldDuration = getTimelineDuration();
+    const oldPosition = playheadPosition;
+    
+    setTimeRange(newRange);
+    
+    // Calculate the current timestamp before changing the range
+    const currentTimestamp = (oldPosition / 100) * oldDuration;
+    
+    // Calculate new position in the new time range
+    const newDuration = timeRangeToSeconds(newRange);
+    const newPosition = (currentTimestamp / newDuration) * 100;
+    
+    // If in live mode, maintain the 80% position
+    if (isLive) {
+      setPlayheadPosition(80);
+    } else {
+      // Otherwise, maintain the relative position in the timeline
+      setPlayheadPosition(Math.min(100, Math.max(0, newPosition)));
+    }
+  };
+
+  // Add helper function to convert time range to seconds
+  const timeRangeToSeconds = (range) => {
+    switch (range) {
+      case '1h':
+        return 60 * 60;
+      case '12h':
+        return 12 * 60 * 60;
+      case '24h':
+        return 24 * 60 * 60;
+      case '7d':
+        return 7 * 24 * 60 * 60;
+      default:
+        return 12 * 60 * 60;
+    }
+  };
+
+  // Modify generateTimeMarkers to handle different time ranges
   const generateTimeMarkers = () => {
     const markers = [];
-    const segments = 12; // 12 hours
+    let segments;
+    let subMarkersPerSegment;
     
-    // Add hour markers
+    switch (timeRange) {
+      case '1h':
+        segments = 12; // One marker every 5 minutes
+        subMarkersPerSegment = 4; // Sub-markers every minute
+        break;
+      case '12h':
+        segments = 12; // One marker per hour
+        subMarkersPerSegment = 2; // Sub-markers every 30 minutes
+        break;
+      case '24h':
+        segments = 24; // One marker per hour
+        subMarkersPerSegment = 1; // Sub-markers every 30 minutes
+        break;
+      default:
+        segments = 12;
+        subMarkersPerSegment = 2;
+    }
+
+    // Generate main markers
     for (let i = 0; i <= segments; i++) {
       const position = (i / segments) * 100;
-      const timestamp = (i / segments) * timelineDuration;
-      
-      // Add hour marker
       markers.push(
-        <React.Fragment key={`hour-${i}`}>
+        <React.Fragment key={`marker-${i}`}>
           <TimeMarker 
             position={position} 
             className="hour" 
@@ -644,37 +1256,21 @@ const TimelineControls = ({
           <TimeMarkerLabel 
             position={position}
           >
-            {i === 12 ? '12 PM' : formatTimestamp(timestamp)}
+            {formatTimestamp(position)}
           </TimeMarkerLabel>
         </React.Fragment>
       );
-      
-      // Add 5-minute markers between hours (11 markers for every 5 minutes)
+
+      // Add sub-markers between main markers
       if (i < segments) {
-        for (let j = 1; j < 12; j++) {
-          const minutePosition = ((i + j/12) / segments) * 100;
-          
-          // Only add visible label for 15, 30, and 45 minute marks
-          const showLabel = (j % 3 === 0);
-          
+        for (let j = 1; j <= subMarkersPerSegment; j++) {
+          const subPosition = ((i + j/(subMarkersPerSegment + 1)) / segments) * 100;
           markers.push(
             <TimeMarker 
-              key={`minute-${i}-${j}`}
-              position={minutePosition}
+              key={`submarker-${i}-${j}`}
+              position={subPosition}
             />
           );
-          
-          if (showLabel) {
-            const minuteTimestamp = ((i + j/12) / segments) * timelineDuration;
-            markers.push(
-              <TimeMarkerLabel 
-                key={`minuteLabel-${i}-${j}`}
-                position={minutePosition}
-              >
-                {formatTimestamp(minuteTimestamp)}
-              </TimeMarkerLabel>
-            );
-          }
         }
       }
     }
@@ -692,8 +1288,11 @@ const TimelineControls = ({
           key={detection.id}
           position={position}
           type={detection.type}
-          title={`${detection.type === 'human' ? 'Person' : 'Vehicle'} detected at ${formatDetailedTimestamp(detection.timestamp)}`}
-          onClick={() => handleEventMarkerClick(detection.timestamp)}
+          title={`${detection.type === 'human' ? 'Person' : 'Vehicle'} detected at ${formatDetailedTimestamp(position)}`}
+          onClick={(e) => {
+            e.stopPropagation(); // Prevent timeline click
+            handleEventMarkerClick(detection.timestamp);
+          }}
         />
       );
     });
@@ -704,7 +1303,7 @@ const TimelineControls = ({
     // Create a map of all detections grouped by timeframe (in 30 minute chunks)
     const timeChunks = {};
     const chunkSize = 30 * 60; // 30 minutes in seconds
-  const filteredDetections = getFilteredDetections();
+    const filteredDetections = getFilteredDetections();
     
     filteredDetections.forEach(detection => {
       const chunkStart = Math.floor(detection.timestamp / chunkSize) * chunkSize;
@@ -750,28 +1349,287 @@ const TimelineControls = ({
     });
   };
   
+  // Handle clicks outside date picker
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (datePickerRef.current && !datePickerRef.current.contains(event.target)) {
+        setShowDatePicker(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Handle date range selection
+  const handleDateRangeSelect = () => {
+    if (!startDate || !endDate) return;
+    
+    setIsHistoricalMode(true);
+    setIsLive(false);
+    setShowDatePicker(false);
+    // Reset playhead to start of selected range
+    setPlayheadPosition(0);
+    setIsPlaying(false);
+    
+    // Here you would typically fetch historical data for the selected date range
+    // For now, we'll just use mock data
+    const allMockDetections = {};
+    for (let i = 1; i <= 10; i++) {
+      allMockDetections[i] = generateHistoricalDetections(i, new Date(startDate), new Date(endDate));
+    }
+    mockDetectionsRef.current = allMockDetections;
+  };
+
+  // Generate historical detections between start and end dates
+  const generateHistoricalDetections = (cameraId, startDate, endDate) => {
+    let seed = cameraId * 1000;
+    const baseDetections = Math.floor(seededRandom(seed) * 15) + 15;
+    const timeRange = endDate - startDate;
+    const detections = [];
+    
+    for (let i = 0; i < baseDetections; i++) {
+      seed += i;
+      const timestamp = startDate.getTime() + (seededRandom(seed * 3) * timeRange);
+      const type = seededRandom(seed * 7) > 0.5 ? 'human' : 'vehicle';
+      
+      detections.push({
+        id: `${cameraId}-${i}`,
+        cameraId,
+        timestamp: Math.floor((timestamp - startDate.getTime()) / 1000),
+        type,
+        confidence: seededRandom(seed * 11) * 0.3 + 0.7
+      });
+    }
+    
+    return detections.sort((a, b) => a.timestamp - b.timestamp);
+  };
+
+  // Reset historical mode
+  const handleResetHistorical = () => {
+    setIsHistoricalMode(false);
+    setStartDate('');
+    setEndDate('');
+    setTimeRange('12h');
+    setPlayheadPosition(30);
+    
+    // Regenerate regular detections
+    const allMockDetections = {};
+    for (let i = 1; i <= 10; i++) {
+      allMockDetections[i] = generateMockDetections(i);
+    }
+    mockDetectionsRef.current = allMockDetections;
+  };
+
+  // Format timestamp for historical mode
+  const formatHistoricalTimestamp = (seconds) => {
+    if (!startDate || !isHistoricalMode) return formatTimestamp(seconds);
+    
+    const start = new Date(startDate);
+    const date = new Date(start.getTime() + (seconds * 1000));
+    
+    return date.toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // Toggle crop mode
+  const toggleCropMode = () => {
+    if (!isCropping) {
+      setIsCropping(true);
+      setCropStart(playheadPosition);
+      setCropEnd(Math.min(playheadPosition + 20, 100)); // Default to 20% of timeline
+      // Pause playback when entering crop mode
+      setIsPlaying(false);
+      setIsLive(false);
+    } else {
+      setIsCropping(false);
+      setCropStart(null);
+      setCropEnd(null);
+    }
+  };
+
+  // Handle crop marker drag
+  const handleCropMarkerMouseDown = (e, marker) => {
+    e.stopPropagation(); // Prevent timeline click
+    e.preventDefault(); // Prevent text selection
+    setIsDraggingCrop(marker);
+    
+    const handleMouseMove = (e) => {
+      if (!timelineRef.current) return;
+      
+      const rect = timelineRef.current.getBoundingClientRect();
+      const position = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+      
+      if (marker === 'start') {
+        if (position < (cropEnd - 1)) { // Prevent start from passing end
+          setCropStart(position);
+        }
+      } else if (marker === 'end') {
+        if (position > (cropStart + 1)) { // Prevent end from passing start
+          setCropEnd(position);
+        }
+      }
+    };
+    
+    const handleMouseUp = () => {
+      setIsDraggingCrop(null);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  // Handle save crop
+  const handleSaveCrop = () => {
+    if (!cropStart || !cropEnd) return;
+    
+    const startTime = (cropStart / 100) * timelineDuration;
+    const endTime = (cropEnd / 100) * timelineDuration;
+    
+    // Format times for display
+    const startTimeFormatted = formatDetailedTimestamp(startTime);
+    const endTimeFormatted = formatDetailedTimestamp(endTime);
+    
+    // Here you would typically handle the actual video cropping
+    console.log(`Saving video clip from ${startTimeFormatted} to ${endTimeFormatted}`);
+    
+    // Reset crop mode
+    setIsCropping(false);
+    setCropStart(null);
+    setCropEnd(null);
+  };
+
+  // Modify the generateRecordingPeriods callback to remove unnecessary dependencies
+  const generateRecordingPeriods = useCallback(() => {
+    const recordingWindow = 300; // 5 minutes in seconds
+    const sortedDetections = getCurrentCameraDetections();
+    const periods = [];
+    
+    if (!sortedDetections.length) {
+      return [{
+        start: 0,
+        end: 100,
+        isRecording: false
+      }];
+    }
+
+    let currentPeriod = {
+      start: (sortedDetections[0].timestamp / timelineDuration) * 100,
+      end: (sortedDetections[0].timestamp / timelineDuration) * 100,
+      isRecording: true
+    };
+
+    // Process each detection
+    for (let i = 1; i < sortedDetections.length; i++) {
+      const currentTime = (sortedDetections[i].timestamp / timelineDuration) * 100;
+      const timeSinceLastDetection = sortedDetections[i].timestamp - sortedDetections[i-1].timestamp;
+
+      if (timeSinceLastDetection > recordingWindow) {
+        // End current recording period
+        currentPeriod.end = (sortedDetections[i-1].timestamp / timelineDuration) * 100 + 2;
+        periods.push(currentPeriod);
+
+        // Add non-recording period
+        if (currentTime - currentPeriod.end > 1) {
+          periods.push({
+            start: currentPeriod.end,
+            end: currentTime,
+            isRecording: false
+          });
+        }
+
+        // Start new recording period
+        currentPeriod = {
+          start: currentTime,
+          end: currentTime,
+          isRecording: true
+        };
+      } else {
+        // Extend current recording period
+        currentPeriod.end = currentTime;
+      }
+    }
+
+    // Add final recording period
+    currentPeriod.end = Math.min(currentPeriod.end + 2, 100);
+    periods.push(currentPeriod);
+
+    // Fill gaps at start and end
+    const allPeriods = [];
+    
+    if (periods[0].start > 0) {
+      allPeriods.push({
+        start: 0,
+        end: periods[0].start,
+        isRecording: false
+      });
+    }
+
+    allPeriods.push(...periods);
+
+    if (periods[periods.length - 1].end < 100) {
+      allPeriods.push({
+        start: periods[periods.length - 1].end,
+        end: 100,
+        isRecording: false
+      });
+    }
+
+    return allPeriods;
+  }, [activeCamera, timelineDuration]); // Remove unnecessary dependencies
+
+  // Update recording periods with debouncing
+  useEffect(() => {
+    // Skip initial render to prevent double updates
+    if (recordingPeriodsInitialRender.current) {
+      recordingPeriodsInitialRender.current = false;
+      return;
+    }
+
+    const newPeriods = generateRecordingPeriods();
+    if (JSON.stringify(recordingPeriods) !== JSON.stringify(newPeriods)) {
+      setRecordingPeriods(newPeriods);
+    }
+  }, [activeCamera, timeRange, generateRecordingPeriods]);
+
+  // Update the live interval effect to prevent infinite updates
+  useEffect(() => {
+    let liveInterval;
+    if (isLive) {
+      // Set initial position
+      setPlayheadPosition(80);
+      
+      // Update time display every second
+      liveInterval = setInterval(() => {
+        const now = new Date();
+        setCurrentTime(now);
+        
+        if (onTimelineUpdate) {
+          onTimelineUpdate({
+            isLive: true,
+            isPlaying: true,
+            playheadPosition: 80
+          });
+        }
+      }, 1000);
+    }
+    return () => {
+      if (liveInterval) clearInterval(liveInterval);
+    };
+  }, [isLive, onTimelineUpdate]);
+
   return (
     <TimelineContainer>
       <ControlsRow>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <PlaybackGroup>
-            <ControlButton onClick={() => {
-              setPlayheadPosition(prev => Math.max(0, prev - 1));
-              if (isLive) setIsLive(false);
-            }} title="Skip Backward">
-              <span className="material-icons" style={{ fontSize: '16px' }}>replay_10</span>
-          </ControlButton>
-            <ControlButton onClick={togglePlayPause} title={isPlaying ? "Pause" : "Play"}>
-              <span className="material-icons" style={{ fontSize: '16px' }}>{isPlaying ? "pause" : "play_arrow"}</span>
-          </ControlButton>
-            <ControlButton onClick={() => {
-              setPlayheadPosition(prev => Math.min(100, prev + 1));
-              if (isLive) setIsLive(false);
-            }} title="Skip Forward">
-              <span className="material-icons" style={{ fontSize: '16px' }}>forward_10</span>
-          </ControlButton>
-        </PlaybackGroup>
-          
+        <LeftControls>
           <FilterControls>
             <FilterToggle 
               active={showHumans}
@@ -790,27 +1648,163 @@ const TimelineControls = ({
               <span className="material-icons">directions_car</span>
             </FilterToggle>
           </FilterControls>
+
+          <PlaybackGroup>
+            <ControlButton 
+              onClick={() => {
+                setPlayheadPosition(prev => Math.max(0, prev - 1));
+                if (isLive) setIsLive(false);
+              }} 
+              title="Skip Backward"
+              disabled={isCropping}
+            >
+              <span className="material-icons" style={{ fontSize: '16px' }}>replay_10</span>
+            </ControlButton>
+            <ControlButton
+              onClick={togglePlayPause}
+              className="primary"
+              title={isPlaying ? 'Pause' : 'Play'}
+            >
+              <span className="material-icons">
+                {isPlaying ? 'pause' : 'play_arrow'}
+              </span>
+            </ControlButton>
+            <ControlButton 
+              onClick={() => {
+                setPlayheadPosition(prev => Math.min(100, prev + 1));
+                if (isLive) setIsLive(false);
+              }} 
+              title="Skip Forward"
+              disabled={isCropping}
+            >
+              <span className="material-icons" style={{ fontSize: '16px' }}>forward_10</span>
+            </ControlButton>
+            <CropButton 
+              active={isCropping}
+              onClick={toggleCropMode}
+              title={isCropping ? "Cancel video clip selection" : "Select video clip"}
+            >
+              <span className="material-icons" style={{ fontSize: '16px' }}>content_cut</span>
+            </CropButton>
+            {isCropping && cropStart !== null && cropEnd !== null && (
+              <SaveCropButton
+                onClick={handleSaveCrop}
+                title="Save selected video clip"
+              >
+                <span className="material-icons" style={{ fontSize: '16px' }}>save</span>
+              </SaveCropButton>
+            )}
+          </PlaybackGroup>
           
+          <TimeRangeSelector>
+            {!isHistoricalMode ? (
+              <>
+                <TimeRangeButton 
+                  active={timeRange === '1h'} 
+                  onClick={() => handleTimeRangeChange('1h')}
+                  title="Show last hour"
+                >
+                  <span className="material-icons">schedule</span>
+                  1h
+                </TimeRangeButton>
+                <TimeRangeButton 
+                  active={timeRange === '12h'} 
+                  onClick={() => handleTimeRangeChange('12h')}
+                  title="Show last 12 hours"
+                >
+                  12h
+                </TimeRangeButton>
+                <TimeRangeButton 
+                  active={timeRange === '24h'} 
+                  onClick={() => handleTimeRangeChange('24h')}
+                  title="Show last 24 hours"
+                >
+                  24h
+                </TimeRangeButton>
+              </>
+            ) : (
+              <DateRangeButton 
+                active={true}
+                onClick={handleResetHistorical}
+                title="Reset to live timeline"
+              >
+                <span className="material-icons">event</span>
+                {new Date(startDate).toLocaleDateString()} - {new Date(endDate).toLocaleDateString()}
+              </DateRangeButton>
+            )}
+            
+            {!isHistoricalMode && (
+              <DateRangeButton
+                active={showDatePicker}
+                onClick={() => setShowDatePicker(!showDatePicker)}
+                title="Select custom date range"
+              >
+                <span className="material-icons">history</span>
+                Historical
+              </DateRangeButton>
+            )}
+          </TimeRangeSelector>
+          
+          <DateRangePopup show={showDatePicker} ref={datePickerRef}>
+            <div className="date-inputs">
+              <div className="date-input-group">
+                <label>Start Date & Time</label>
+                <input
+                  type="datetime-local"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                />
+              </div>
+              <div className="date-input-group">
+                <label>End Date & Time</label>
+                <input
+                  type="datetime-local"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="actions">
+              <DateRangeAction onClick={() => setShowDatePicker(false)}>
+                Cancel
+              </DateRangeAction>
+              <DateRangeAction 
+                primary 
+                onClick={handleDateRangeSelect}
+                disabled={!startDate || !endDate}
+              >
+                View Timeline
+              </DateRangeAction>
+            </div>
+          </DateRangePopup>
+        </LeftControls>
+
+        <CenterControls>
           <ActiveCameraBadge>
             <span className="material-icons">videocam</span>
             <span className="camera-name">{getActiveCameraName()}</span>
           </ActiveCameraBadge>
-        </div>
+        </CenterControls>
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <TimeDisplay>
-            {isLive ? "LIVE" : formatDetailedTimestamp(getCurrentTimestamp())}
-        </TimeDisplay>
-        
-        <LiveButton 
-          isLive={isLive} 
-            onClick={toggleLive}
-            title={isLive ? "Exit live mode" : "Go to live"}
-        >
-          <span className="material-icons">fiber_manual_record</span>
-          LIVE
-        </LiveButton>
-        </div>
+        <TimeDisplayGroup>
+          <TimeRangeDisplay>
+            <span className="material-icons">schedule</span>
+            {isHistoricalMode ? 'Historical View' : getTimeRangeLabel()}
+          </TimeRangeDisplay>
+          <TimeDisplay>
+            {isHistoricalMode ? formatHistoricalTimestamp(getCurrentTimestamp()) : formatDetailedTimestamp(getCurrentTimestamp())}
+          </TimeDisplay>
+          {!isHistoricalMode && (
+            <LiveButton 
+              isLive={isLive} 
+              onClick={toggleLive}
+              title={isLive ? "Exit live mode" : "Go live"}
+            >
+              <span className="material-icons">fiber_manual_record</span>
+              LIVE
+            </LiveButton>
+          )}
+        </TimeDisplayGroup>
       </ControlsRow>
       
       <TimelineTrackContainer>
@@ -826,9 +1820,45 @@ const TimelineControls = ({
           
           {generateEventMarkers()}
           
+          {/* Add FutureTimeOverlay */}
+          <FutureTimeOverlay 
+            currentPosition={80} 
+            isLive={isLive}
+          />
+          
+          {/* Update recording periods rendering */}
+          {recordingPeriods.map((period, index) => (
+            <RecordingBar
+              key={`recording-${index}`}
+              startPosition={period.start}
+              endPosition={period.end}
+              isRecording={period.isRecording}
+            />
+          ))}
+          
+          {isCropping && cropStart !== null && cropEnd !== null && (
+            <>
+              <CropSelection
+                startPosition={cropStart}
+                endPosition={cropEnd}
+              />
+              <CropMarker 
+                position={cropStart}
+                isStart={true}
+                onMouseDown={(e) => handleCropMarkerMouseDown(e, 'start')}
+              />
+              <CropMarker 
+                position={cropEnd}
+                isStart={false}
+                onMouseDown={(e) => handleCropMarkerMouseDown(e, 'end')}
+              />
+            </>
+          )}
+          
           <PlayheadMarker 
             position={playheadPosition} 
             onMouseDown={handlePlayheadMouseDown}
+            style={{ display: isCropping ? 'none' : 'block' }}
           />
         </TimelineTrack>
       </TimelineTrackContainer>

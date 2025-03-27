@@ -273,13 +273,19 @@ const MainContent = styled.div`
 `;
 
 const CameraViewContainer = styled.div`
-  flex: ${props => props.isAlertsDocked ? '0.7' : '1'};
+  flex: 1;
   padding: 20px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: flex 0.3s ease;
+  transition: all 0.3s ease;
   position: relative;
+`;
+
+const CameraSelectorContainer = styled.div`
+  width: ${props => props.show ? '260px' : '0'};
+  overflow: hidden;
+  transition: width 0.3s ease;
 `;
 
 const CameraContent = styled.div`
@@ -861,6 +867,9 @@ function App() {
     }
   });
   
+  // Update camera selector state to just show/hide
+  const [showCameraSelector, setShowCameraSelector] = useState(false);
+  
   useEffect(() => {
     const handleStorageChange = () => {
       const savedCameras = localStorage.getItem('mdi_cameras');
@@ -1235,7 +1244,7 @@ function App() {
               <TabGroup>
                 <LayoutSelector>
                   <Tab 
-                    active={true} 
+                    active={layoutDropdownOpen} 
                     onClick={() => {
                       if (layoutDropdownOpen) {
                         setLayoutDropdownOpen(false);
@@ -1269,6 +1278,18 @@ function App() {
                   </LayoutDropdown>
                 </LayoutSelector>
                 
+                {/* Update Cameras tab to not be active by default */}
+                <Tab 
+                  active={showCameraSelector}
+                  onClick={() => {
+                    setShowCameraSelector(!showCameraSelector);
+                  }}
+                >
+                  <span className="material-icons">videocam</span>
+                  Cameras
+                </Tab>
+                
+                {/* Update other tabs to not be active by default */}
                 <Tab 
                   active={showSavedViews} 
                   onClick={() => setShowSavedViews(!showSavedViews)}
@@ -1283,7 +1304,7 @@ function App() {
                 >
                   <span className="material-icons">notifications</span>
                   Alerts
-                  <span className="alert-indicator" title="5 unresolved alerts"></span>
+                  {alertCount > 0 && <span className="alert-indicator" title={`${alertCount} unresolved alerts`}></span>}
                 </Tab>
                 
                 <Tab 
@@ -1356,7 +1377,7 @@ function App() {
           </Header>
           
           <MainContent>
-            <CameraViewContainer isAlertsDocked={isAlertsDocked && showAlertsPanel}>
+            <CameraViewContainer>
               <CameraContent>
                 <CameraView 
                   activeDetections={activeDetections} 
@@ -1403,6 +1424,20 @@ function App() {
               </CameraStatusTabs>
             </CameraViewContainer>
             
+            <CameraSelectorContainer show={showCameraSelector}>
+              {showCameraSelector && (
+                <CameraSelector
+                  activeCamera={activeCamera}
+                  onSelectCamera={(cameraId) => {
+                    console.log(`CameraSelector: Selected camera ${cameraId}`);
+                    handleCameraFocus(cameraId, selectedLayout === 'single');
+                  }}
+                  onClose={() => setShowCameraSelector(false)}
+                  showTab={!showCameraSelector}
+                />
+              )}
+            </CameraSelectorContainer>
+            
             <DockedAlertsContainer isDocked={isAlertsDocked && showAlertsPanel}>
               <DockedAlertsHeader>
                 <h2>
@@ -1430,15 +1465,6 @@ function App() {
                 <AlertPanel activeCamera={activeCamera} isDocked={true} />
               </DockedAlertsContent>
             </DockedAlertsContainer>
-            
-            <CameraSelector
-              activeCamera={activeCamera}
-              onSelectCamera={(cameraId) => {
-                console.log(`CameraSelector: Selected camera ${cameraId}`);
-                // Simply call our improved handler function to ensure consistent behavior
-                handleCameraFocus(cameraId, selectedLayout === 'single');
-              }}
-            />
             
             <AlertOverlay 
               show={showAlertsPanel} 

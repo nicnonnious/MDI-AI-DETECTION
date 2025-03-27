@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import styled from 'styled-components';
 import { standardCameras } from '../mockBackend';
 
@@ -346,7 +346,7 @@ const SelectedCameraBadge = styled.div`
 
 const CameraView = ({
   activeDetections = [],
-  layout = 'single',
+  layout = '3x3',
   activeCamera = 1,
   onCameraFocus,
   isLive = true,
@@ -355,189 +355,226 @@ const CameraView = ({
   cameraFilterMode = 'all',
   selectedCameras = []
 }) => {
-  const [cameraTime, setCameraTime] = useState(new Date());
-  const [dropdownOpen, setDropdownOpen] = useState(null);
+  const [cameraPositions, setCameraPositions] = useState({});
+  const [dropdownPosition, setDropdownPosition] = useState(null);
   const [draggedCamera, setDraggedCamera] = useState(null);
   const [dragOverPosition, setDragOverPosition] = useState(null);
+  const dropdownRef = useRef(null);
+  const videoRefs = useRef({});
+  const webcamRefs = useRef({});
+  const lastUpdateTime = useRef(Date.now());
+  const pendingUpdates = useRef(new Set());
+  const isTransitioning = useRef(false);
+  const lastDoubleClickTimeRef = useRef(0);
+  const transitionTimeoutRef = useRef(null);
+  const videoLoadingRef = useRef({});
+  const lastPlayheadUpdateRef = useRef(playheadPosition);
+  
   const [gridCameras, setGridCameras] = useState({});
   const [selectedPosition, setSelectedPosition] = useState(0);
-  const webcamRefs = useRef({});
-  
-  // Add state for video references
-  const videoRefs = useRef({});
-  
-  // Store current playhead position
-  const [currentPlayheadPosition, setCurrentPlayheadPosition] = useState(playheadPosition);
-  
-  // Load camera data from localStorage
-  const [storedCameras, setStoredCameras] = useState(() => {
-    const savedCameras = localStorage.getItem('mdi_cameras');
-    if (savedCameras) {
-      try {
-        const parsedCameras = JSON.parse(savedCameras);
-        console.log('CameraView: Loaded cameras from localStorage:', parsedCameras.length);
-        return parsedCameras;
-      } catch (e) {
-        console.error('Error parsing saved cameras:', e);
-        console.log('CameraView: Falling back to standardized camera list');
-        return standardCameras; // Fallback to standardized list
+  const [cameraTime, setCameraTime] = useState(new Date());
+  const [isDraggingCrop, setIsDraggingCrop] = useState(false);
+
+  const throttledStateUpdate = useCallback((updateFn) => {
+    const now = Date.now();
+    if (now - lastUpdateTime.current > 50) { // 50ms throttle
+      updateFn();
+      lastUpdateTime.current = now;
+      pendingUpdates.current.clear();
+    } else {
+      pendingUpdates.current.add(updateFn);
+    }
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (pendingUpdates.current.size > 0) {
+        const updates = Array.from(pendingUpdates.current);
+        updates.forEach(update => update());
+        pendingUpdates.current.clear();
+        lastUpdateTime.current = Date.now();
+      }
+    }, 50);
+    return () => clearInterval(interval);
+  }, []);
+
+  const safePlayVideo = async (videoElement) => {
+    if (!videoElement) return;
+    
+    try {
+      if (document.body.contains(videoElement)) {
+        await videoElement.play();
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Error playing video:', err);
       }
     }
-    console.log('CameraView: No cameras in localStorage, using standardized list');
-    return standardCameras; // Use standardized list if nothing in localStorage
-  });
-  
-  // Listen for changes to localStorage
+  };
+
   useEffect(() => {
-    const handleStorageChange = () => {
-      const savedCameras = localStorage.getItem('mdi_cameras');
-      if (savedCameras) {
-        try {
-          const parsedCameras = JSON.parse(savedCameras);
-          console.log('CameraView: Storage event received, updating cameras:', parsedCameras.length);
-          setStoredCameras(parsedCameras);
-        } catch (e) {
-          console.error('Error parsing saved cameras:', e);
+    if (!isPlaying || !activeCamera) return;
+
+    const syncVideo = async () => {
+      const video = videoRefs.current[activeCamera];
+      if (!video) return;
+
+      const videoDuration = video.duration || 300;
+      const targetTime = (playheadPosition / 100) * videoDuration;
+      
+      if (Math.abs(video.currentTime - targetTime) > 0.5) {
+        video.currentTime = targetTime;
+      }
+
+      if (isPlaying) {
+        await safePlayVideo(video);
+      }
+    };
+
+    syncVideo();
+    const interval = setInterval(syncVideo, 1000);
+    return () => clearInterval(interval);
+  }, [activeCamera, isPlaying, playheadPosition]);
+
+  useEffect(() => {
+    const activeCameraElement = videoRefs.current[activeCamera];
+    if (!activeCameraElement) return;
+
+    let isMounted = true;
+
+    const syncVideo = async () => {
+      try {
+        if (!isMounted || !document.body.contains(activeCameraElement)) return;
+
+        const videoDuration = activeCameraElement.duration || 300;
+        const targetTime = (playheadPosition / 100) * videoDuration;
+        
+        if (Math.abs(activeCameraElement.currentTime - targetTime) > 1) {
+          activeCameraElement.currentTime = targetTime;
+        }
+        
+        if (isPlaying && activeCameraElement.paused) {
+          if (document.body.contains(activeCameraElement)) {
+            await activeCameraElement.play();
+          }
+        } else if (!isPlaying && !activeCameraElement.paused) {
+          activeCameraElement.pause();
+        }
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('Video sync error:', err);
         }
       }
     };
+
+    syncVideo();
+
+    return () => {
+      isMounted = false;
+      if (activeCameraElement && document.body.contains(activeCameraElement)) {
+        activeCameraElement.pause();
+      }
+    };
+  }, [activeCamera, playheadPosition, isPlaying]);
+
+  const handleVideoLoad = useCallback((videoElement, cameraId, isActive) => {
+    if (!videoElement) return;
     
-    // Set up event listeners
-    window.addEventListener('storage', handleStorageChange);
-    
-    // Set up interval check for localStorage changes
-    const interval = setInterval(() => {
-      handleStorageChange();
-    }, 2000); // Check every 2 seconds
+    let isMounted = true;
+
+    const handleLoadedMetadata = async () => {
+      try {
+        if (!isMounted || !document.body.contains(videoElement)) return;
+
+        if (isActive && !isLive) {
+          // Only set currentTime if we have a valid duration
+          if (videoElement.duration && isFinite(videoElement.duration)) {
+            const videoTime = (playheadPosition / 100) * videoElement.duration;
+            if (isFinite(videoTime)) {
+              videoElement.currentTime = videoTime;
+            }
+          }
+          
+          if (isPlaying && document.body.contains(videoElement)) {
+            await videoElement.play();
+          }
+        }
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('Video load error:', err);
+        }
+      }
+    };
+
+    videoElement.addEventListener('loadedmetadata', handleLoadedMetadata);
     
     return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
-  }, []);
-  
-  // Get camera info by ID, using localStorage data if available
-  const getCameraById = (cameraId) => {
-    // First check localStorage cameras
-    const storedCamera = storedCameras.find(c => c.id === cameraId);
-    if (storedCamera) {
-      // Create a formatted camera object with all needed properties
-      return {
-        ...storedCamera,
-        isLive: storedCamera.isLive !== undefined ? storedCamera.isLive : true,
-        isWebcam: storedCamera.isWebcam || false,
-        // For RTSP cameras, use either rtsp_url or url field
-        rtsp_url: storedCamera.rtsp_url || storedCamera.url,
-        // Use existing videoSrc if provided, otherwise set a default for testing
-        videoSrc: storedCamera.videoSrc || (storedCamera.type === 'test-video' ? storedCamera.url : `https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4`),
-        // Keep image source as fallback
-        src: storedCamera.isWebcam ? null : `https://picsum.photos/seed/${cameraId}/800/600`
-      };
-    }
-    
-    // Fallback to the standard cameras
-    const standardCamera = standardCameras.find(c => c.id === cameraId);
-    if (standardCamera) {
-      console.log(`CameraView: Using standardized camera for ID ${cameraId}`);
-      return {
-        ...standardCamera,
-        src: standardCamera.isWebcam ? null : `https://picsum.photos/seed/${cameraId}/800/600`
-      };
-    }
-    
-    // Last resort fallback
-    console.warn(`CameraView: No camera found for ID ${cameraId}, using fallback`);
-    return { 
-      id: cameraId, 
-      name: `Camera ${cameraId}`, 
-      isLive: true,
-      isWebcam: cameraId === 10, // Special case for webcam
-      videoSrc: `https://storage.googleapis.com/gtv-videos-bucket/sample/${cameraId % 2 === 0 ? 'ElephantsDream' : 'ForBiggerBlazes'}.mp4`,
-      src: cameraId === 10 ? null : `https://picsum.photos/seed/${cameraId}/800/600`
-    };
-  };
-  
-  // Ensure we're using the complete standard cameras list
-  const mockCameras = standardCameras;
-  console.log('CameraView: Using standardized camera list with', mockCameras.length, 'cameras');
-  
-  // Create filtered camera list based on mode
-  const filteredCameras = mockCameras.filter(camera => {
-    if (cameraFilterMode === 'online') return camera.isLive;
-    if (cameraFilterMode === 'offline') return !camera.isLive;
-    return true; // 'all' mode
-  });
-
-  // Initialize grid cameras when layout or selectedCameras changes
-  useEffect(() => {
-    console.log("CameraView useEffect: Layout or cameras changed");
-    console.log("Current selectedCameras:", selectedCameras);
-    console.log("Current activeCamera:", activeCamera);
-    
-    // Initialize grid cameras based on the selected cameras and layout
-    const newGridCameras = {};
-    const totalCells = layout === 'single' ? 1 : layout === '2x2' ? 4 : 9;
-    
-    // Use selectedCameras to populate the grid
-    if (selectedCameras && selectedCameras.length > 0) {
-      // Fill grid positions with selected cameras, maintaining their original positions
-      for (let i = 0; i < Math.min(totalCells, selectedCameras.length); i++) {
-        newGridCameras[i] = selectedCameras[i];
+      isMounted = false;
+      if (document.body.contains(videoElement)) {
+        videoElement.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        videoElement.pause();
       }
+    };
+  }, [isPlaying, playheadPosition, isLive]);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    
+    const interval = setInterval(() => {
+      throttledStateUpdate(() => setCameraTime(new Date()));
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [isPlaying, throttledStateUpdate]);
+
+  const storedCameras = useMemo(() => {
+    try {
+      const savedCameras = localStorage.getItem('mdi_cameras');
+      return savedCameras ? JSON.parse(savedCameras) : standardCameras;
+    } catch (e) {
+      console.error('Error parsing saved cameras:', e);
+      return standardCameras;
+    }
+  }, []);
+
+  const mockCameras = standardCameras;
+
+  const getCameraById = useCallback((cameraId) => {
+    return storedCameras.find(c => c.id === cameraId) || null;
+  }, [storedCameras]);
+
+  useEffect(() => {
+    const totalCells = layout === 'single' ? 1 : layout === '2x2' ? 4 : 9;
+    const newGridCameras = {};
+
+    if (selectedCameras?.length > 0) {
+      selectedCameras.slice(0, totalCells).forEach((cameraId, index) => {
+        newGridCameras[index] = cameraId;
+      });
     } else {
-      // Fallback to active camera if no selected cameras
       newGridCameras[0] = activeCamera;
     }
-    
-    // Set the grid cameras state
-    setGridCameras(newGridCameras);
-    
-    // Find which position contains the active camera
-    if (layout !== 'single') {
-      console.log(`Looking for active camera ${activeCamera} position in grid`);
-      
-      // Search for the position of the active camera
-      let foundPosition = -1;
-      for (let pos = 0; pos < totalCells; pos++) {
-        if (newGridCameras[pos] === activeCamera) {
-          foundPosition = pos;
-          break;
-        }
-      }
-      
-      if (foundPosition !== -1) {
-        console.log(`Found active camera ${activeCamera} at position ${foundPosition}`);
-        // Update the selected position to highlight this camera
-        setSelectedPosition(foundPosition);
-      } else {
-        console.log(`Active camera ${activeCamera} not found in grid`);
-        // Don't change grid cameras here; we'll let App.js handle adding the camera if needed
-      }
-    } else {
-      // In single view, there's only position 0
-      setSelectedPosition(0);
+
+    const newSelectedPosition = Object.entries(newGridCameras)
+      .find(([_, id]) => id === activeCamera)?.[0] || 0;
+
+    if (JSON.stringify(gridCameras) !== JSON.stringify(newGridCameras)) {
+      setGridCameras(newGridCameras);
+    }
+    if (selectedPosition !== newSelectedPosition) {
+      setSelectedPosition(newSelectedPosition);
     }
   }, [layout, selectedCameras, activeCamera]);
 
-  // Remove the second useEffect that was adding cameras at position 0
-  // and replace it with one that just tracks activeCamera changes
+  const filteredCameras = useMemo(() => {
+    return standardCameras.filter(camera => {
+      if (cameraFilterMode === 'online') return camera.isLive;
+      if (cameraFilterMode === 'offline') return !camera.isLive;
+      return true;
+    });
+  }, [cameraFilterMode]);
+
   useEffect(() => {
-    if (layout !== 'single') {
-      console.log(`activeCamera changed to ${activeCamera}, updating highlighted position`);
-      
-      // Find which position has this camera
-      const position = Object.entries(gridCameras)
-        .find(([_, cameraId]) => cameraId === activeCamera)?.[0];
-        
-      if (position !== undefined) {
-        console.log(`Found active camera at position ${position}, highlighting it`);
-        setSelectedPosition(parseInt(position));
-      }
-    }
-  }, [activeCamera, layout, gridCameras]);
-  
-  // Update the date time every second if live
-  React.useEffect(() => {
     if (isLive) {
       const timer = setInterval(() => {
         setCameraTime(new Date());
@@ -547,9 +584,7 @@ const CameraView = ({
     }
   }, [isLive]);
 
-  // Handle webcam initialization
   useEffect(() => {
-    // Check if we need to display the webcam (active in single mode or included in grid)
     const isWebcamVisible = Object.values(gridCameras).includes(10);
     
     const setupWebcam = async () => {
@@ -570,7 +605,6 @@ const CameraView = ({
     
     setupWebcam();
     
-    // Cleanup on unmount
     return () => {
       if (webcamRefs.current.webcamStream) {
         webcamRefs.current.webcamStream.getTracks().forEach(track => track.stop());
@@ -578,18 +612,16 @@ const CameraView = ({
     };
   }, [gridCameras]);
   
-  // Connect webcam stream to video element when available
   useEffect(() => {
     if (webcamRefs.current.webcamRef && webcamRefs.current.webcamStream) {
       webcamRefs.current.webcamRef.srcObject = webcamRefs.current.webcamStream;
     }
   }, [webcamRefs.current.webcamStream]);
   
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (dropdownOpen !== null && !event.target.closest('.camera-dropdown')) {
-        setDropdownOpen(null);
+      if (dropdownPosition !== null && !event.target.closest('.camera-dropdown')) {
+        setDropdownPosition(null);
       }
     };
     
@@ -597,9 +629,8 @@ const CameraView = ({
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [dropdownOpen]);
+  }, [dropdownPosition]);
   
-  // Format date and time to match security camera format
   const formatDateTime = (date) => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -611,12 +642,10 @@ const CameraView = ({
     return `${month}-${day}-${year} ${hours}:${minutes}:${seconds}`;
   };
 
-  // Add new state for mock detections
   const [mockDetections, setMockDetections] = useState({});
   
-  // Mock video durations for each camera (in minutes)
   const videoDurations = {
-    1: 5,  // 5 minutes
+    1: 5,  
     2: 8,
     3: 10,
     4: 6,
@@ -628,19 +657,16 @@ const CameraView = ({
     10: 5
   };
   
-  // Function to generate random detections for a camera
-  const generateMockDetections = (cameraId) => {
+  const generateMockDetections = useCallback((cameraId) => {
     const videoDuration = videoDurations[cameraId] || 5;
-    const totalDetections = Math.floor(Math.random() * 8) + 3; // 3-10 detections
+    const totalDetections = Math.floor(Math.random() * 8) + 3;
     
     const detections = [];
     for (let i = 0; i < totalDetections; i++) {
-      // Generate random position within the camera view
-      const x = Math.random() * 400 + 100; // 100-500px from left
-      const y = Math.random() * 300 + 50;  // 50-350px from top
+      const x = Math.random() * 400 + 100;
+      const y = Math.random() * 300 + 50;  
       
-      // Random timestamp within the video duration
-      const timestamp = Math.random() * videoDuration * 60; // in seconds
+      const timestamp = Math.random() * videoDuration * 60;
       const type = Math.random() > 0.5 ? 'human' : 'vehicle';
       
       detections.push({
@@ -649,37 +675,30 @@ const CameraView = ({
         coordinates: { x, y },
         timestamp,
         type,
-        status: Math.random() > 0.3 ? 'confirmed' : 'pending', // 70% confirmed, 30% pending
-        confidence: Math.random() * 0.3 + 0.7 // 0.7-1.0 confidence
+        status: Math.random() > 0.3 ? 'confirmed' : 'pending',
+        confidence: Math.random() * 0.3 + 0.7
       });
     }
     
     return detections;
-  };
+  }, []);
   
-  // Initialize mock detections on first render
   useEffect(() => {
     const allMockDetections = {};
     for (let i = 1; i <= 10; i++) {
       allMockDetections[i] = generateMockDetections(i);
     }
     setMockDetections(allMockDetections);
-  }, []);
+  }, [generateMockDetections]);
 
-  // Update the getDetectionsForCamera function to use our mock data
   const getDetectionsForCamera = (cameraId) => {
-    // If we have mock data for this camera, use it
     if (mockDetections[cameraId]) {
-      // Filter to only show detections at the current playhead position
-      // (In a real app, this would be more sophisticated based on timestamps)
       return mockDetections[cameraId];
     }
     
-    // Fallback to using the activeDetections passed as prop
     return activeDetections.filter(d => d.id % mockCameras.length === cameraId % mockCameras.length);
   };
   
-  // Adjust coordinates based on cell size for layouts
   const adjustCoordinates = (coords, isSmall) => {
     if (!isSmall) return coords;
     
@@ -690,22 +709,12 @@ const CameraView = ({
     };
   };
 
-  // Track last double click time using ref instead of window
-  const lastDoubleClickTimeRef = useRef(0);
-  
-  // Track layout transitions
-  const isTransitioning = useRef(false);
-  const transitionTimeoutRef = useRef(null);
-  
-  // Handle double-click on a camera to focus on it in single view mode
   const handleCameraDoubleClick = useCallback((camera) => {
-    // Prevent actions during transition
     if (isTransitioning.current) {
       console.log('Layout transition in progress, ignoring double-click');
       return;
     }
 
-    // Prevent multiple rapid executions
     const now = Date.now();
     if (now - lastDoubleClickTimeRef.current < 300) {
       return;
@@ -716,10 +725,8 @@ const CameraView = ({
       isTransitioning.current = true;
       
       if (layout === 'single') {
-        // Going back to multi-view
         console.log('Double-clicked in single view, transitioning to multi-view');
         
-        // First pause and unload all videos
         Object.entries(videoRefs.current).forEach(([id, videoEl]) => {
           if (videoEl) {
             try {
@@ -733,10 +740,8 @@ const CameraView = ({
           }
         });
 
-        // Call focus change
         onCameraFocus(camera.id, false);
         
-        // Delay the layout toggle to ensure cleanup is complete
         if (transitionTimeoutRef.current) {
           clearTimeout(transitionTimeoutRef.current);
         }
@@ -749,10 +754,8 @@ const CameraView = ({
         }, 100);
         
       } else {
-        // Going to single view
         console.log(`Double-clicked on camera ${camera.id}, transitioning to single view`);
         
-        // Clean up all other videos first
         Object.entries(videoRefs.current).forEach(([id, videoEl]) => {
           if (videoEl && parseInt(id) !== camera.id) {
             try {
@@ -766,10 +769,8 @@ const CameraView = ({
           }
         });
         
-        // Call focus change after cleanup
         onCameraFocus(camera.id, true);
         
-        // Reset transition state after a delay
         if (transitionTimeoutRef.current) {
           clearTimeout(transitionTimeoutRef.current);
         }
@@ -781,15 +782,12 @@ const CameraView = ({
     }
   }, [layout, onCameraFocus]);
 
-  // Enhanced cleanup when component unmounts
   useEffect(() => {
     return () => {
-      // Clear any pending transitions
       if (transitionTimeoutRef.current) {
         clearTimeout(transitionTimeoutRef.current);
       }
       
-      // Clean up all video elements
       Object.entries(videoRefs.current).forEach(([id, videoEl]) => {
         if (videoEl) {
           try {
@@ -802,18 +800,19 @@ const CameraView = ({
         }
       });
       
-      // Reset refs
       videoRefs.current = {};
       webcamRefs.current = {};
       isTransitioning.current = false;
+      lastDoubleClickTimeRef.current = 0;
+      transitionTimeoutRef.current = null;
+      videoLoadingRef.current = {};
+      lastPlayheadUpdateRef.current = 0;
     };
   }, []);
 
-  // Handle layout changes
   useEffect(() => {
     console.log(`Layout changed to ${layout}`);
     
-    // Clean up videos that aren't needed in the new layout
     Object.entries(videoRefs.current).forEach(([id, videoEl]) => {
       const isVideoNeeded = Object.values(gridCameras).includes(parseInt(id));
       if (videoEl && !isVideoNeeded) {
@@ -830,11 +829,9 @@ const CameraView = ({
     });
   }, [layout, gridCameras]);
 
-  // Handle fullscreen button click - same as double-click
   const handleFullscreenClick = useCallback((e, camera) => {
-    e.stopPropagation(); // Prevent double-click event from firing
+    e.stopPropagation();
     
-    // Prevent multiple rapid executions
     if (window.lastFullscreenClickTime && Date.now() - window.lastFullscreenClickTime < 300) {
       return;
     }
@@ -842,70 +839,57 @@ const CameraView = ({
     
     if (onCameraFocus) {
       if (layout === 'single') {
-        // If we're already in single view, this is a request to go back to multi-view
         console.log(`Fullscreen button clicked in single view, returning to multi-view layout`);
-        onCameraFocus(camera.id, false); // Don't change layout via this call
+        onCameraFocus(camera.id, false);
         
-        // Call the global toggle function
         if (window.toggleCameraLayout) {
           window.toggleCameraLayout();
         }
       } else {
-        // Normal behavior - go to single view with this camera
         console.log(`Fullscreen button clicked for camera ${camera.id}, switching to single view`);
         onCameraFocus(camera.id, true);
       }
     }
   }, [layout, onCameraFocus]);
 
-  // Cleanup the lastFullscreenClickTime when component unmounts
   useEffect(() => {
     return () => {
       delete window.lastFullscreenClickTime;
     };
   }, []);
   
-  // Toggle the camera selection dropdown for a specific grid position
   const toggleDropdown = (position, e) => {
     e.stopPropagation();
-    if (dropdownOpen === position) {
-      setDropdownOpen(null);
+    if (dropdownPosition === position) {
+      setDropdownPosition(null);
     } else {
-      setDropdownOpen(position);
+      setDropdownPosition(position);
     }
   };
   
-  // Handle when a camera is dropped or selected for a specific position in the grid
   const selectCameraForPosition = (position, cameraId) => {
     console.log(`Selecting camera ${cameraId} for position ${position}`);
     
-    // IMPORTANT: First update the active camera to ensure it's selected immediately
-    // Call onCameraFocus before changing our local state to avoid race conditions
     if (onCameraFocus) {
       console.log(`Immediately setting selected camera ${cameraId} as the active camera`);
       onCameraFocus(cameraId, false);
     }
     
-    // Then update grid cameras - maintain positions in the grid
     const updatedCameras = { ...gridCameras, [position]: cameraId };
     setGridCameras(updatedCameras);
     
-    // Update the selected position state for visual highlighting
     setSelectedPosition(position);
     
-    // Force immediate video synchronization with timeline
     setTimeout(() => {
       console.log(`Synchronizing selected camera ${cameraId} with timeline state`);
       
       const videoEl = videoRefs.current[cameraId];
       if (videoEl) {
         try {
-          // Apply current timeline position
           const duration = videoEl.duration || 300;
-          const targetTime = (currentPlayheadPosition / 100) * duration;
+          const targetTime = (playheadPosition / 100) * duration;
           videoEl.currentTime = targetTime;
           
-          // Apply play/pause state
           if (isPlaying) {
             videoEl.play().catch(e => console.error(`Error starting selected camera playback:`, e));
           } else {
@@ -916,88 +900,101 @@ const CameraView = ({
         }
       }
       
-      // Re-assert the selected position to ensure it's properly highlighted
       if (position !== selectedPosition) {
         console.log(`Forcing selected position update to ${position}`);
         setSelectedPosition(position);
       }
-    }, 50); // Shorter timeout for more immediate response
+    }, 50);
     
-    // Close the dropdown after selection
-    setDropdownOpen(null);
+    setDropdownPosition(null);
   };
   
-  // Handle drag start from camera selector
   const handleDragStart = (event, camera) => {
     setDraggedCamera(camera);
-    // Set data for external drag sources (like from CameraSelector)
     if (event.dataTransfer) {
       event.dataTransfer.setData('text/plain', JSON.stringify(camera));
     }
   };
   
-  // Handle drag over
   const handleDragOver = (event, position) => {
     event.preventDefault();
     setDragOverPosition(position);
   };
   
-  // Handle drag leave
   const handleDragLeave = () => {
     setDragOverPosition(null);
   };
   
-  // Handle drop
   const handleDrop = (event, position) => {
     event.preventDefault();
     setDragOverPosition(null);
     
     let camera = draggedCamera;
     
-    // If dragged from external source (CameraSelector)
     if (!camera && event.dataTransfer) {
       try {
-        const data = event.dataTransfer.getData('text/plain');
-        camera = JSON.parse(data);
+        const data = event.dataTransfer.getData('application/json');
+        if (data) {
+          camera = JSON.parse(data);
+        } else {
+          const textData = event.dataTransfer.getData('text/plain');
+          if (textData) {
+            camera = JSON.parse(textData);
+          }
+        }
+        
+        if (!camera) {
+          const cameraId = parseInt(event.dataTransfer.getData('camera/id'));
+          if (!isNaN(cameraId)) {
+            camera = getCameraById(cameraId);
+          }
+        }
+        
+        if (!camera) {
+          console.error('No valid camera data found in drop event');
+          return;
+        }
+        
         console.log(`Parsed camera data from drag event:`, camera);
       } catch (e) {
         console.error('Failed to parse dragged camera data:', e);
-        return;
+        
+        try {
+          const cameraId = parseInt(event.dataTransfer.getData('camera/id'));
+          if (!isNaN(cameraId)) {
+            camera = getCameraById(cameraId);
+          }
+        } catch (e2) {
+          console.error('Failed to recover camera data:', e2);
+          return;
+        }
       }
     }
     
     if (camera) {
       console.log(`Camera ${camera.id} dropped at position ${position}`);
       
-      // IMPORTANT: First update the active camera to ensure it's selected immediately
-      // Call onCameraFocus before changing our local state to avoid race conditions
       if (onCameraFocus) {
         console.log(`Immediately setting dropped camera ${camera.id} as the active camera`);
         onCameraFocus(camera.id, false);
       }
       
-      // Then update grid cameras for the position - this maintains positions
       const updatedCameras = { ...gridCameras, [position]: camera.id };
       setGridCameras(updatedCameras);
       setDraggedCamera(null);
       
-      // Update the selected position to the dropped position
       setSelectedPosition(position);
       
-      // Force immediate video synchronization with timeline
-      // This is needed because the state updates might not have propagated yet
       setTimeout(() => {
         console.log(`Synchronizing dropped camera ${camera.id} with timeline state`);
         
         const videoEl = videoRefs.current[camera.id];
         if (videoEl) {
           try {
-            // Apply current timeline position
             const duration = videoEl.duration || 300;
-            const targetTime = (currentPlayheadPosition / 100) * duration;
+            const targetTime = (playheadPosition / 100) * duration;
             videoEl.currentTime = targetTime;
             
-            // Apply play/pause state
             if (isPlaying) {
               videoEl.play().catch(e => console.error(`Error starting dropped camera playback:`, e));
             } else {
@@ -1008,108 +1005,30 @@ const CameraView = ({
           }
         }
         
-        // Re-assert the selected position to ensure it's properly highlighted
         if (position !== selectedPosition) {
           console.log(`Forcing selected position update to ${position}`);
           setSelectedPosition(position);
         }
-      }, 50); // Shorter timeout for more immediate response
+      }, 50);
     }
   };
   
-  // Special effect to immediately update newly added cameras with correct timeline state
-  // This solves the issue where dragged cameras don't respond to timeline until clicked
-  useEffect(() => {
-    console.log("Grid cameras or active camera changed, checking for newly added videos");
-    
-    // Find video element for the active camera
-    const activeCameraElement = videoRefs.current[activeCamera];
-    
-    if (activeCameraElement) {
-      console.log(`Found video element for active camera ${activeCamera}, synchronizing with timeline...`);
-      
-      // Immediately apply current timeline position
-      const videoDuration = activeCameraElement.duration || 300; // Default to 5 minutes if duration not available
-      const targetTime = (currentPlayheadPosition / 100) * videoDuration;
-      
-      // Only seek if the difference is significant
-      if (Math.abs(activeCameraElement.currentTime - targetTime) > 1) {
-        console.log(`Setting active camera time to ${targetTime}s based on playhead position ${currentPlayheadPosition}%`);
-        activeCameraElement.currentTime = targetTime;
-      }
-      
-      // Apply current play/pause state
-      if (isPlaying && activeCameraElement.paused) {
-        console.log("Timeline is playing, playing active camera");
-        activeCameraElement.play().catch(err => console.error("Error playing video:", err));
-      } else if (!isPlaying && !activeCameraElement.paused) {
-        console.log("Timeline is paused, pausing active camera");
-        activeCameraElement.pause();
-      }
-    }
-  }, [gridCameras, activeCamera, currentPlayheadPosition, isPlaying]);
-  
-  // Handle single click on a camera to make it the "selected" camera for the timeline
   const handleCameraClick = (camera, position, event) => {
-    // Prevent event bubbling to avoid triggering other click events
     event.stopPropagation();
     
     console.log(`Camera ${camera.id} clicked at position ${position}`);
     
-    // Update the selected position state immediately for visual feedback
     setSelectedPosition(position);
     
-    // Call onCameraFocus with false to not change the layout
     if (onCameraFocus) {
       onCameraFocus(camera.id, false);
     }
   };
   
-  // Handle changes to playhead position from props
-  useEffect(() => {
-    setCurrentPlayheadPosition(playheadPosition);
-    
-    // Only update the active camera's video position
-    const activeCameraElement = videoRefs.current[activeCamera];
-    
-    if (activeCameraElement) {
-      const videoDuration = activeCameraElement.duration || 300; // Default to 5 minutes if duration not available
-      const targetTime = (playheadPosition / 100) * videoDuration;
-      
-      // Only seek if the difference is significant to avoid constant seeking
-      if (Math.abs(activeCameraElement.currentTime - targetTime) > 1) {
-        activeCameraElement.currentTime = targetTime;
-      }
-      
-      // Handle play/pause state only for the active camera
-      if (isPlaying && activeCameraElement.paused) {
-        activeCameraElement.play().catch(err => console.error("Error playing video:", err));
-      } else if (!isPlaying && !activeCameraElement.paused) {
-        activeCameraElement.pause();
-      }
-    }
-  }, [playheadPosition, isPlaying, activeCamera]);
-  
-  // Handle play/pause state changes
-  useEffect(() => {
-    // Only control the active camera
-    const activeCameraElement = videoRefs.current[activeCamera];
-    
-    if (activeCameraElement) {
-      if (isPlaying && activeCameraElement.paused) {
-        activeCameraElement.play().catch(err => console.error("Error playing video:", err));
-      } else if (!isPlaying && !activeCameraElement.paused) {
-        activeCameraElement.pause();
-      }
-    }
-  }, [isPlaying, activeCamera]);
-  
-  // Generate cell content
-  const renderCellContent = (position) => {
+  const renderCellContent = useCallback((position) => {
     const camera = gridCameras[position] ? getCameraById(gridCameras[position]) : null;
     
-    // If no camera is assigned to this position
-    if (camera === null) {
+    if (!camera) {
       return (
         <EmptyCameraSlot
           onDragOver={(e) => handleDragOver(e, position)}
@@ -1122,10 +1041,16 @@ const CameraView = ({
           </AddCameraButton>
           <div>Select Camera</div>
           
-          <CameraDropdown isOpen={dropdownOpen === position} className="camera-dropdown">
+          <CameraDropdown isOpen={dropdownPosition === position} className="camera-dropdown">
             <DropdownHeader>
               <span>Select Camera</span>
-              <span className="material-icons" style={{ cursor: 'pointer' }} onClick={() => setDropdownOpen(null)}>close</span>
+              <span 
+                className="material-icons" 
+                style={{ cursor: 'pointer' }} 
+                onClick={() => setDropdownPosition(null)}
+              >
+                close
+              </span>
             </DropdownHeader>
             <DropdownList>
               {filteredCameras.map(camera => (
@@ -1134,7 +1059,9 @@ const CameraView = ({
                   isLive={camera.isLive}
                   onClick={() => selectCameraForPosition(position, camera.id)}
                 >
-                  <span className="material-icons">{camera.isLive ? 'videocam' : 'videocam_off'}</span>
+                  <span className="material-icons">
+                    {camera.isLive ? 'videocam' : 'videocam_off'}
+                  </span>
                   {camera.name}
                 </DropdownItem>
               ))}
@@ -1143,7 +1070,7 @@ const CameraView = ({
         </EmptyCameraSlot>
       );
     }
-    
+
     return (
       <CameraImage 
         isZoomable={layout !== 'single'}
@@ -1159,7 +1086,6 @@ const CameraView = ({
       >
         <DropIndicator isOver={dragOverPosition === position} />
         
-        {/* Show badge on the selected camera - based on position */}
         {position === selectedPosition && layout !== 'single' && (
           <SelectedCameraBadge title="This camera is shown on the timeline">
             <span className="material-icons">timeline</span>
@@ -1167,58 +1093,34 @@ const CameraView = ({
           </SelectedCameraBadge>
         )}
         
-        {camera.isWebcam && (
+        {camera.isWebcam ? (
           <WebcamVideo 
             ref={(el) => {
-              webcamRefs.current.webcamRef = el;
-              webcamRefs.current.webcamStream = webcamRefs.current.webcamRef.srcObject;
+              if (el) {
+                webcamRefs.current.webcamRef = el;
+                if (!el.srcObject) {
+                  el.srcObject = webcamRefs.current.webcamStream;
+                }
+              }
             }} 
             autoPlay 
             playsInline 
             muted
           />
-        )}
-        
-        {camera.videoSrc && !camera.isWebcam && (
+        ) : camera.videoSrc && (
           <CameraVideo
-            key={`camera-${camera.id}-${camera.id === activeCamera ? 'active' : 'inactive'}`}
-            ref={el => { videoRefs.current[camera.id] = el; }}
+            key={`camera-${camera.id}-${isPlaying}-${playheadPosition}`}
+            ref={el => {
+              if (el) {
+                videoRefs.current[camera.id] = el;
+                handleVideoLoad(el, camera.id, camera.id === activeCamera);
+              }
+            }}
             src={camera.videoSrc}
-            autoPlay={camera.id === activeCamera ? isPlaying : true}
+            autoPlay={camera.id === activeCamera ? isPlaying : false}
             loop
             muted
             playsInline
-            onLoadedMetadata={e => {
-              // When video is loaded, set to correct position if it's the active camera
-              const videoEl = e.target;
-              console.log(`Video loaded for camera ${camera.id} (active: ${camera.id === activeCamera})`);
-              
-              if (camera.id === activeCamera) {
-                // This is the active camera, sync with timeline position and play state
-                console.log(`Setting active camera ${camera.id} initial position to ${currentPlayheadPosition}%`);
-                const videoDuration = videoEl.duration || 300;
-                const targetTime = (currentPlayheadPosition / 100) * videoDuration;
-                
-                // Set the current time to match the timeline
-                videoEl.currentTime = targetTime;
-                
-                // Match the timeline's play/pause state
-                if (isPlaying) {
-                  console.log(`Starting playback for active camera ${camera.id}`);
-                  videoEl.play().catch(err => console.error("Error playing video:", err));
-                } else {
-                  console.log(`Pausing active camera ${camera.id} to match timeline`);
-                  videoEl.pause();
-                }
-              } else {
-                // For non-active cameras, always play and don't sync with timeline
-                console.log(`Starting playback for non-active camera ${camera.id}`);
-                videoEl.play().catch(err => console.error("Error playing non-active camera:", err));
-              }
-            }}
-            onPlay={() => console.log(`Camera ${camera.id} playback started`)}
-            onPause={() => console.log(`Camera ${camera.id} playback paused`)}
-            onError={(e) => console.error(`Error with camera ${camera.id} video:`, e)}
           />
         )}
         
@@ -1243,7 +1145,9 @@ const CameraView = ({
               {camera.name}
               {camera.isLive && <LiveIndicator isSmall={layout !== 'single'}>LIVE</LiveIndicator>}
             </CameraName>
-            <CameraDateTime isSmall={layout !== 'single'}>{formatDateTime(cameraTime)}</CameraDateTime>
+            <CameraDateTime isSmall={layout !== 'single'}>
+              {formatDateTime(cameraTime)}
+            </CameraDateTime>
           </CameraInfo>
         </CameraOverlay>
         
@@ -1257,21 +1161,31 @@ const CameraView = ({
               onClick={(e) => handleFullscreenClick(e, camera)}
               title="Switch to Single View"
             >
-              <span className="material-icons" style={{ fontSize: '16px' }}>fullscreen</span>
+              <span className="material-icons" style={{ fontSize: '16px' }}>
+                fullscreen
+              </span>
             </CameraControlButton>
           )}
           <CameraControlButton 
             onClick={(e) => toggleDropdown(position, e)}
             title="Change Camera"
           >
-            <span className="material-icons" style={{ fontSize: '16px' }}>swap_horiz</span>
+            <span className="material-icons" style={{ fontSize: '16px' }}>
+              swap_horiz
+            </span>
           </CameraControlButton>
         </CameraControls>
         
-        <CameraDropdown isOpen={dropdownOpen === position} className="camera-dropdown">
+        <CameraDropdown isOpen={dropdownPosition === position} className="camera-dropdown">
           <DropdownHeader>
             <span>Select Camera</span>
-            <span className="material-icons" style={{ cursor: 'pointer' }} onClick={() => setDropdownOpen(null)}>close</span>
+            <span 
+              className="material-icons" 
+              style={{ cursor: 'pointer' }} 
+              onClick={() => setDropdownPosition(null)}
+            >
+              close
+            </span>
           </DropdownHeader>
           <DropdownList>
             {filteredCameras.map(camera => (
@@ -1280,7 +1194,9 @@ const CameraView = ({
                 isLive={camera.isLive}
                 onClick={() => selectCameraForPosition(position, camera.id)}
               >
-                <span className="material-icons">{camera.isLive ? 'videocam' : 'videocam_off'}</span>
+                <span className="material-icons">
+                  {camera.isLive ? 'videocam' : 'videocam_off'}
+                </span>
                 {camera.name}
               </DropdownItem>
             ))}
@@ -1288,24 +1204,133 @@ const CameraView = ({
         </CameraDropdown>
       </CameraImage>
     );
-  };
-  
-  // Generate grid cells
-  const generateGridCells = () => {
+  }, [
+    layout,
+    selectedPosition,
+    dragOverPosition,
+    dropdownPosition,
+    filteredCameras,
+    activeCamera,
+    isPlaying,
+    playheadPosition,
+    cameraTime,
+    handleVideoLoad,
+    handleCameraDoubleClick,
+    handleCameraClick,
+    handleFullscreenClick,
+    toggleDropdown,
+    selectCameraForPosition,
+    getCameraById,
+    gridCameras
+  ]);
+
+  const gridCells = useMemo(() => {
     const cellCount = layout === 'single' ? 1 : layout === '2x2' ? 4 : 9;
     return Array.from({ length: cellCount }).map((_, index) => (
       <CameraGridCell key={index} layout={layout}>
-        <DropIndicator isOver={dragOverPosition === index} />
         {renderCellContent(index)}
       </CameraGridCell>
     ));
-  };
-  
+  }, [layout, renderCellContent]);
+
+  useEffect(() => {
+    if (isLive) {
+      // In live mode, ensure all videos are playing at real-time
+      Object.values(videoRefs.current).forEach(videoRef => {
+        if (videoRef && videoRef.videoElement) {
+          const video = videoRef.videoElement;
+          if (video.paused) {
+            video.play().catch(err => console.warn('Failed to play video:', err));
+          }
+          video.playbackRate = 1.0;
+          
+          // For live streams, ensure we're using the stream
+          if (videoRef.stream) {
+            if (video.srcObject !== videoRef.stream) {
+              video.srcObject = videoRef.stream;
+            }
+          }
+          // For recorded videos in live mode, try to sync to current time
+          else if (video.duration) {
+            const now = new Date();
+            const midnight = new Date(now);
+            midnight.setHours(0, 0, 0, 0);
+            const secondsSinceMidnight = (now - midnight) / 1000;
+            const videoTime = (secondsSinceMidnight % video.duration);
+            
+            if (Math.abs(video.currentTime - videoTime) > 0.5) {
+              video.currentTime = videoTime;
+            }
+          }
+        }
+      });
+    } else {
+      // In playback mode, sync all videos to the timeline position
+      Object.values(videoRefs.current).forEach(videoRef => {
+        if (videoRef && videoRef.videoElement) {
+          const video = videoRef.videoElement;
+          if (!video.duration) return; // Skip if duration is not available yet
+          
+          // Convert playhead percentage to video time
+          const videoTime = (playheadPosition / 100) * video.duration;
+          
+          if (Math.abs(video.currentTime - videoTime) > 0.5) {
+            video.currentTime = videoTime;
+          }
+          
+          if (isPlaying && video.paused) {
+            video.play().catch(err => console.warn('Failed to play video:', err));
+          } else if (!isPlaying && !video.paused) {
+            video.pause();
+          }
+        }
+      });
+    }
+  }, [isLive, isPlaying, playheadPosition]);
+
   return (
     <CameraViewContainer>
-      {generateGridCells()}
+      {gridCells}
+      {dropdownPosition && (
+        <CameraDropdown
+          ref={dropdownRef}
+          isOpen={!!dropdownPosition}
+          style={{
+            top: dropdownPosition?.y || '50%',
+            left: dropdownPosition?.x || '50%'
+          }}
+        >
+          <DropdownHeader>
+            Select Camera
+            <span 
+              className="material-icons" 
+              style={{ cursor: 'pointer' }}
+              onClick={() => setDropdownPosition(null)}
+            >
+              close
+            </span>
+          </DropdownHeader>
+          <DropdownList>
+            {standardCameras.map(camera => (
+              <DropdownItem
+                key={camera.id}
+                onClick={() => {
+                  selectCameraForPosition(dropdownPosition.position, camera.id);
+                  setDropdownPosition(null);
+                }}
+                isLive={isLive}
+              >
+                <span className="material-icons">
+                  {isLive ? 'videocam' : 'history'}
+                </span>
+                {camera.name}
+              </DropdownItem>
+            ))}
+          </DropdownList>
+        </CameraDropdown>
+      )}
     </CameraViewContainer>
   );
 };
 
-export default CameraView; 
+export default React.memo(CameraView); 

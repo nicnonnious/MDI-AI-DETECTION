@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useCallback, useMemo, useState, useRef } from 'react';
 import styled from 'styled-components';
 import { standardCameras } from '../mockBackend';
 
@@ -6,9 +6,13 @@ const SidebarContainer = styled.div`
   width: 260px;
   background-color: #1e1e1e;
   border-left: 1px solid #333;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+  position: relative;
+  height: 100%;
+  transition: all 0.3s ease;
+  z-index: 100;
 `;
 
 const SidebarHeader = styled.div`
@@ -18,6 +22,34 @@ const SidebarHeader = styled.div`
   padding: 10px 15px;
   color: white;
   border-bottom: 1px solid #333;
+  background-color: #1e1e1e;
+`;
+
+const HeaderControls = styled.div`
+  display: flex;
+  gap: 8px;
+  align-items: center;
+`;
+
+const ControlButton = styled.button`
+  background: none;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  
+  &:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: white;
+  }
+  
+  .material-icons {
+    font-size: 18px;
+  }
 `;
 
 const SidebarTitle = styled.h3`
@@ -150,146 +182,191 @@ const DragTip = styled.div`
 // Sample filter icon - this would be replaced with a proper icon in production
 const filterIcon = <span className="material-icons">filter_alt</span>;
 
+// Add a new component for the drag handle
+const DragHandle = styled.div`
+  cursor: ${props => props.isDocked ? 'default' : 'move'};
+  user-select: none;
+  flex: 1;
+  display: flex;
+  align-items: center;
+`;
+
 // Updated camera selector to use localStorage for camera data
-const CameraSelector = ({ activeCamera, onSelectCamera }) => {
-  // Load cameras from localStorage or use default list
-  const [cameras, setCameras] = React.useState(() => {
-    const savedCameras = localStorage.getItem('mdi_cameras');
-    if (savedCameras) {
-      try {
-        const parsedCameras = JSON.parse(savedCameras);
-        console.log('CameraSelector: Loaded cameras from localStorage:', parsedCameras.length);
-        // Ensure all cameras have required properties
-        return parsedCameras.map(camera => ({
-          ...camera,
-          isLive: camera.isLive !== undefined ? camera.isLive : true,
-          isWebcam: camera.isWebcam || camera.type === 'usb' || false
-        }));
-      } catch (e) {
-        console.error('Error parsing saved cameras:', e);
-        console.log('CameraSelector: Using default cameras due to parse error');
-        return getDefaultCameras();
-      }
-    } else {
-      console.log('CameraSelector: No cameras in localStorage, using default cameras');
-      return getDefaultCameras();
-    }
-  });
-  
-  // Debug logging when cameras state changes
-  useEffect(() => {
-    console.log('CameraSelector: Current cameras state:', cameras.length, 'cameras');
-  }, [cameras]);
-  
-  // Function to get default cameras if none in localStorage
-  function getDefaultCameras() {
-    console.log('CameraSelector: Using standardized camera list:', standardCameras.length, 'cameras');
-    return standardCameras;
-  }
-  
-  // Update cameras when localStorage changes - add manual refresh every 3 seconds
-  React.useEffect(() => {
-    const handleStorageChange = () => {
+const CameraSelector = ({ 
+  activeCamera, 
+  onSelectCamera,
+  onClose,
+  showTab = false
+}) => {
+  // Use useRef for persisting values without causing rerenders
+  const camerasRef = useRef(null);
+  const [cameras, setCameras] = useState(() => {
+    // Initial load of cameras - only runs once
+    const loadCameras = () => {
       const savedCameras = localStorage.getItem('mdi_cameras');
       if (savedCameras) {
         try {
           const parsedCameras = JSON.parse(savedCameras);
-          console.log('CameraSelector: Storage event received, updating cameras:', parsedCameras.length);
-          // Ensure all cameras have required properties
-          setCameras(parsedCameras.map(camera => ({
+          return parsedCameras.map(camera => ({
             ...camera,
-            isLive: camera.isLive !== undefined ? camera.isLive : true,
+            isLive: camera.isLive ?? true,
             isWebcam: camera.isWebcam || camera.type === 'usb' || false
-          })));
+          }));
         } catch (e) {
-          console.error('Error parsing saved cameras from storage event:', e);
+          console.error('Error parsing saved cameras:', e);
+          return standardCameras;
+        }
+      }
+      return standardCameras;
+    };
+    
+    const initialCameras = loadCameras();
+    camerasRef.current = initialCameras;
+    return initialCameras;
+  });
+
+  const [searchTerm, setSearchTerm] = useState('');
+  const lastUpdateRef = useRef(Date.now());
+
+  // Memoize the camera update function
+  const updateCameras = useCallback((newCameras) => {
+    const processed = newCameras.map(camera => ({
+      ...camera,
+      isLive: camera.isLive ?? true,
+      isWebcam: camera.isWebcam || camera.type === 'usb' || false
+    }));
+    
+    // Only update if the data has actually changed
+    if (JSON.stringify(processed) !== JSON.stringify(camerasRef.current)) {
+      camerasRef.current = processed;
+      setCameras(processed);
+      lastUpdateRef.current = Date.now();
+    }
+  }, []);
+
+  // Handle storage events
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (e?.key === 'mdi_cameras' && e.newValue) {
+        try {
+          const parsedCameras = JSON.parse(e.newValue);
+          updateCameras(parsedCameras);
+        } catch (e) {
+          console.error('Error parsing cameras from storage event:', e);
         }
       }
     };
-    
-    // Set up event listeners
+
     window.addEventListener('storage', handleStorageChange);
     
-    // Also set up an interval to check for changes within the same window - more frequent checks
-    const interval = setInterval(() => {
+    // Polling interval for local updates
+    const checkInterval = setInterval(() => {
+      // Only check if enough time has passed (5 seconds)
+      if (Date.now() - lastUpdateRef.current < 5000) return;
+
       const savedCameras = localStorage.getItem('mdi_cameras');
-      if (savedCameras) {
-        try {
-          const parsedCameras = JSON.parse(savedCameras);
-          if (JSON.stringify(parsedCameras) !== JSON.stringify(cameras)) {
-            console.log('CameraSelector: Interval check detected changes, updating cameras:', parsedCameras.length);
-            setCameras(parsedCameras.map(camera => ({
-              ...camera,
-              isLive: camera.isLive !== undefined ? camera.isLive : true,
-              isWebcam: camera.isWebcam || camera.type === 'usb' || false
-            })));
-          }
-        } catch (e) {
-          console.error('Error parsing saved cameras from interval check:', e);
-        }
+      if (!savedCameras) return;
+
+      try {
+        const parsedCameras = JSON.parse(savedCameras);
+        updateCameras(parsedCameras);
+      } catch (e) {
+        console.error('Error parsing cameras from interval check:', e);
       }
-    }, 1000); // Check every second
-    
-    // Force a refresh on component mount to ensure we have the latest data
-    handleStorageChange();
-    
+    }, 5000);
+
     return () => {
       window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
+      clearInterval(checkInterval);
     };
-  }, [cameras]);
-  
-  const [draggingCamera, setDraggingCamera] = React.useState(null);
-  const [searchTerm, setSearchTerm] = React.useState('');
-  
-  // Filter cameras based on search term
-  const filteredCameras = cameras.filter(camera =>
-    camera.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-  
-  // Handle drag start
-  const handleDragStart = (e, camera) => {
-    setDraggingCamera(camera.id);
-    
-    // Set the drag data with high priority and redundancy
-    const cameraData = JSON.stringify(camera);
-    e.dataTransfer.setData('text/plain', cameraData);
-    e.dataTransfer.setData('application/json', cameraData); // Alternative format
-    e.dataTransfer.effectAllowed = 'copy';
-    
-    // Create a drag image
-    const dragImg = document.createElement('div');
-    dragImg.textContent = camera.name;
-    dragImg.style.padding = '10px';
-    dragImg.style.background = '#2c3e50';
-    dragImg.style.color = 'white';
-    dragImg.style.borderRadius = '4px';
-    dragImg.style.position = 'absolute';
-    dragImg.style.top = '-1000px';
-    document.body.appendChild(dragImg);
-    
-    e.dataTransfer.setDragImage(dragImg, 20, 20);
-    
-    // Remove the temp element after a short delay
-    setTimeout(() => {
-      document.body.removeChild(dragImg);
-    }, 100);
-    
-    console.log(`Started dragging camera: ${camera.id} - ${camera.name}`);
-  };
-  
-  // Handle drag end
-  const handleDragEnd = () => {
-    setDraggingCamera(null);
-  };
+  }, [updateCameras]);
+
+  // Memoize filtered cameras
+  const filteredCameras = useMemo(() => {
+    if (!searchTerm) return cameras;
+    const searchLower = searchTerm.toLowerCase();
+    return cameras.filter(camera => 
+      camera.name.toLowerCase().includes(searchLower)
+    );
+  }, [cameras, searchTerm]);
+
+  // Memoize camera item renderer
+  const renderCameraItem = useCallback((camera) => (
+    <CameraItem 
+      key={camera.id} 
+      active={activeCamera === camera.id}
+      onClick={() => onSelectCamera?.(camera.id)}
+      draggable
+      onDragStart={(e) => {
+        // Set multiple data formats for better compatibility
+        e.dataTransfer.setData('application/json', JSON.stringify(camera));
+        e.dataTransfer.setData('text/plain', JSON.stringify(camera));
+        e.dataTransfer.setData('camera/id', camera.id.toString());
+        
+        // Set drag effect
+        e.dataTransfer.effectAllowed = 'move';
+        
+        // Optional: Set a drag image
+        const dragImage = document.createElement('div');
+        dragImage.textContent = camera.name;
+        dragImage.style.padding = '8px';
+        dragImage.style.background = '#2c3e50';
+        dragImage.style.color = 'white';
+        dragImage.style.borderRadius = '4px';
+        dragImage.style.position = 'absolute';
+        dragImage.style.top = '-1000px';
+        document.body.appendChild(dragImage);
+        e.dataTransfer.setDragImage(dragImage, 0, 0);
+        
+        // Clean up the drag image element after a short delay
+        setTimeout(() => {
+          document.body.removeChild(dragImage);
+        }, 0);
+      }}
+    >
+      <CameraThumb videoSrc={camera.videoSrc || (camera.type === 'test-video' ? camera.url : null)}>
+        {(camera.videoSrc || (camera.type === 'test-video' && camera.url)) && (
+          <VideoThumb
+            src={camera.videoSrc || camera.url}
+            muted
+            loop
+            autoPlay
+            playsInline
+          />
+        )}
+        {camera.isLive && <LiveBadge>LIVE</LiveBadge>}
+        {camera.isWebcam && (
+          <WebcamIcon>
+            <span className="material-icons">videocam</span>
+          </WebcamIcon>
+        )}
+      </CameraThumb>
+      <CameraName active={activeCamera === camera.id}>
+        {camera.name}
+      </CameraName>
+    </CameraItem>
+  ), [activeCamera, onSelectCamera]);
+
+  // Debounce search input
+  const handleSearchChange = useCallback((e) => {
+    const value = e.target.value;
+    if (searchTerm !== value) {
+      setSearchTerm(value);
+    }
+  }, [searchTerm]);
 
   return (
     <SidebarContainer>
       <SidebarHeader>
         <SidebarTitle>Cameras</SidebarTitle>
-        <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'white' }}>
-          {filterIcon}
-        </button>
+        <HeaderControls>
+          <ControlButton 
+            onClick={onClose}
+            title="Close"
+          >
+            <span className="material-icons">close</span>
+          </ControlButton>
+        </HeaderControls>
       </SidebarHeader>
       
       <SearchInput>
@@ -297,7 +374,7 @@ const CameraSelector = ({ activeCamera, onSelectCamera }) => {
           type="text" 
           placeholder="Search cameras..." 
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={handleSearchChange}
         />
       </SearchInput>
       
@@ -307,41 +384,10 @@ const CameraSelector = ({ activeCamera, onSelectCamera }) => {
       </DragTip>
       
       <CameraList>
-        {filteredCameras.map(camera => (
-          <CameraItem 
-            key={camera.id} 
-            active={activeCamera === camera.id}
-            isDragging={draggingCamera === camera.id}
-            onClick={() => onSelectCamera && onSelectCamera(camera.id)}
-            draggable
-            onDragStart={(e) => handleDragStart(e, camera)}
-            onDragEnd={handleDragEnd}
-          >
-            <CameraThumb videoSrc={camera.videoSrc || (camera.type === 'test-video' ? camera.url : null)}>
-              {(camera.videoSrc || (camera.type === 'test-video' && camera.url)) && (
-                <VideoThumb
-                  src={camera.videoSrc || camera.url}
-                  muted
-                  loop
-                  autoPlay
-                  playsInline
-                />
-              )}
-              {camera.isLive && <LiveBadge>LIVE</LiveBadge>}
-              {camera.isWebcam && (
-                <WebcamIcon>
-                  <span className="material-icons">videocam</span>
-                </WebcamIcon>
-              )}
-            </CameraThumb>
-            <CameraName active={activeCamera === camera.id}>
-              {camera.name}
-            </CameraName>
-          </CameraItem>
-        ))}
+        {filteredCameras.map(renderCameraItem)}
       </CameraList>
     </SidebarContainer>
   );
 };
 
-export default CameraSelector; 
+export default React.memo(CameraSelector); 
